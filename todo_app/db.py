@@ -564,6 +564,34 @@ MIGRATIONS: list[str] = [
     DROP TABLE sync_state;
     ALTER TABLE customer_sync DROP COLUMN sources;
     """,
+    # 16: opt-in interactive Codex assignments and durable launch receipts.
+    """
+    ALTER TABLE agent_profiles ADD COLUMN executor TEXT NOT NULL DEFAULT 'claude'
+        CHECK (executor IN ('claude', 'codex-herdr'));
+    ALTER TABLE launcher_runs ADD COLUMN executor TEXT NOT NULL DEFAULT 'claude';
+    ALTER TABLE launcher_runs ADD COLUMN launch TEXT NOT NULL DEFAULT '{}';
+    """,
+
+    # 17: native app/Remote executor; preserve existing profiles and legacy executor defaults.
+    """
+    ALTER TABLE agent_profiles RENAME TO agent_profiles_v16;
+    CREATE TABLE agent_profiles (
+        person_id INTEGER PRIMARY KEY REFERENCES people (id) ON DELETE CASCADE,
+        claude_agent TEXT NOT NULL,
+        machine TEXT,
+        model TEXT,
+        max_turns INTEGER,
+        allowed_tools TEXT NOT NULL DEFAULT '',
+        projects TEXT NOT NULL DEFAULT '[]',
+        auto_dispatch INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        executor TEXT NOT NULL DEFAULT 'claude' CHECK (executor IN ('claude', 'codex-herdr', 'codex-app'))
+    );
+    INSERT INTO agent_profiles SELECT * FROM agent_profiles_v16;
+    DROP TABLE agent_profiles_v16;
+    """,
+
 ]
 
 

@@ -12,10 +12,11 @@ export default function PersonDialog({ person, kind: initialKind = "human", onCl
   const { data: machines = [] } = useAgents();
   const [kind, setKind] = useState<Person["kind"]>(person?.kind ?? initialKind);
   const { data: profile } = useAgentProfile(person?.kind === "agent" ? person.id : null);
-  const [agent, setAgent] = useState({ claude_agent: "", machine: "", model: "", allowed_tools: "", auto_dispatch: true });
+  const [agent, setAgent] = useState<AgentForm>({ executor: "claude", claude_agent: "", machine: "", model: "", allowed_tools: "", auto_dispatch: true });
   useEffect(() => {
     if (profile)
       setAgent({
+        executor: profile.executor ?? "claude",
         claude_agent: profile.claude_agent ?? "",
         machine: profile.machine ?? "",
         model: profile.model ?? "",
@@ -149,7 +150,7 @@ export default function PersonDialog({ person, kind: initialKind = "human", onCl
   );
 }
 
-type AgentForm = { claude_agent: string; machine: string; model: string; allowed_tools: string; auto_dispatch: boolean };
+type AgentForm = { executor: "claude" | "codex-herdr" | "codex-app"; claude_agent: string; machine: string; model: string; allowed_tools: string; auto_dispatch: boolean };
 
 /** How an agent runs: the Claude Code agent file in the repo, where, and with which tools. */
 function AgentFields({ agent, setAgent, machines }: { agent: AgentForm; setAgent: (a: AgentForm) => void; machines: string[] }) {
@@ -157,12 +158,23 @@ function AgentFields({ agent, setAgent, machines }: { agent: AgentForm; setAgent
     setAgent({ ...agent, [key]: e.target.value });
   return (
     <>
+      <label className="block">
+        <span className="eyebrow mb-1.5 block">Run with</span>
+        <select className="field w-full" value={agent.executor} onChange={(e) => setAgent({ ...agent, executor: e.target.value as AgentForm["executor"], allowed_tools: "" })}>
+          <option value="claude">Claude Code</option>
+          <option value="codex-herdr">Codex in Herdr</option>
+          <option value="codex-app">Codex app / Remote</option>
+        </select>
+        {agent.executor === "codex-herdr" && <span className="mt-1 block text-xs text-muted">Available across projects. Reuses the repository’s Herdr workspace; general tasks use a scratch folder.</span>}
+      {agent.executor === "codex-app" && <span className="mt-1 block text-xs text-muted">Runs on your already connected computer in Codex / ChatGPT Remote. Pair the computer in the app first.</span>}
+        <span className="mt-1 block text-xs text-muted">One agent can handle any customer or project. Use About for a specialized role.</span>
+      </label>
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block">
+        {agent.executor === "claude" && <label className="block">
           <span className="eyebrow mb-1.5 block">Claude agent</span>
           <input className="field w-full font-mono text-[0.8125rem]" placeholder="maintainer" value={agent.claude_agent} onChange={set("claude_agent")} required />
           <span className="mt-1 block text-xs text-muted">.claude/agents/&lt;name&gt;.md: in the project's repo, or ~/.claude/agents on its machine for tasks without a repo</span>
-        </label>
+        </label>}
         <label className="block">
           <span className="eyebrow mb-1.5 block">Runs on</span>
           <select className="field w-full" value={agent.machine} onChange={set("machine")}>
@@ -175,7 +187,7 @@ function AgentFields({ agent, setAgent, machines }: { agent: AgentForm; setAgent
           </select>
         </label>
       </div>
-      <label className="block">
+      {agent.executor === "claude" && <label className="block">
         <span className="eyebrow mb-1.5 block">Allowed tools</span>
         <input
           className="field w-full font-mono text-[0.8125rem]"
@@ -184,11 +196,11 @@ function AgentFields({ agent, setAgent, machines }: { agent: AgentForm; setAgent
           onChange={set("allowed_tools")}
         />
         <span className="mt-1 block text-xs text-muted">What it may do without asking (claude --allowedTools). It edits files in its worktree either way.</span>
-      </label>
+      </label>}
       <div className="grid items-end gap-3 sm:grid-cols-2">
         <label className="block">
           <span className="eyebrow mb-1.5 block">Model</span>
-          <input className="field w-full" placeholder="From the agent file" value={agent.model} onChange={set("model")} />
+          <input className="field w-full" placeholder={agent.executor === "claude" ? "From the agent file" : "Codex default"} value={agent.model} onChange={set("model")} />
         </label>
         <label className="flex items-center gap-2 pb-2 text-sm">
           <input type="checkbox" checked={agent.auto_dispatch} onChange={(e) => setAgent({ ...agent, auto_dispatch: e.target.checked })} />
@@ -196,7 +208,7 @@ function AgentFields({ agent, setAgent, machines }: { agent: AgentForm; setAgent
         </label>
       </div>
       <p className="text-xs text-muted">
-        Easiest from Claude Code in the repo: run <code>/mcp__todo__setup_agent</code> and it sets up both sides.
+        {agent.executor === "codex-herdr" ? "Codex reads AGENTS.md and asks for permissions in its Herdr terminal." : agent.executor === "codex-app" ? "Codex reads AGENTS.md. Review permission requests in the native app or Remote." : <>Easiest from Claude Code in the repo: run <code>/mcp__todo__setup_agent</code> and it sets up both sides.</>}
       </p>
     </>
   );

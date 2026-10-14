@@ -110,6 +110,7 @@ class Dispatch:
             "claude_agent": profile.get("claude_agent"), "machine": profile.get("machine"),
             "model": profile.get("model"), "max_turns": profile.get("max_turns"),
             "allowed_tools": profile.get("allowed_tools", ""), "projects": profile.get("projects", []),
+            "executor": profile.get("executor", "claude"),
             "auto_dispatch": profile.get("auto_dispatch", True), "configured": bool(profile),
             "last_run": runs[0] if runs else None,
         }
@@ -123,6 +124,7 @@ class Dispatch:
         name: str,
         *,
         claude_agent: str | None = None,
+        executor: str | None = None,
         machine: str | None = None,
         model: str | None = None,
         max_turns: int | None = None,
@@ -146,8 +148,15 @@ class Dispatch:
             raise Invalid(f"{person['name']} is a person, not an agent. Pick another name.")
         current = self.profile(person["id"]) if person else None
         claude_agent = (claude_agent or "").strip() or (current or {}).get("claude_agent") or ""
+        executor = executor or (current or {}).get("executor", "claude")
+        if executor not in ("claude", "codex-herdr", "codex-app"):
+            raise Invalid("executor must be claude, codex-herdr or codex-app")
+        if executor in ("codex-herdr", "codex-app") and not claude_agent:
+            claude_agent = "codex"  # compatibility field; Codex reads AGENTS.md, not Claude agent files
         if not CLAUDE_AGENT.fullmatch(claude_agent):
             raise Invalid("claude_agent is the agent file's name: .claude/agents/<claude_agent>.md (letters, digits, - and _)")
+        if executor in ("codex-herdr", "codex-app") and (allowed_tools or max_turns):
+            raise Invalid("Claude allowed_tools/max_turns are not supported by Codex")
         project_ids = None
         if projects is not None:
             project_ids = [self.store.resolve_project(p)["id"] for p in projects if p not in (None, "")]  # type: ignore[index]
@@ -159,10 +168,11 @@ class Dispatch:
                 person = self.people.create(name, kind="agent", title=title or "Agent", area="work")
             values = {
                 "claude_agent": claude_agent,
+                "executor": executor,
                 "machine": ((machine or "").strip() or None) if machine is not None else (current or {}).get("machine"),
                 "model": ((model or "").strip() or None) if model is not None else (current or {}).get("model"),
-                "max_turns": max_turns if max_turns is not None else (current or {}).get("max_turns"),
-                "allowed_tools": allowed_tools.strip() if allowed_tools is not None else (current or {}).get("allowed_tools", ""),
+                "max_turns": None if executor in ("codex-herdr", "codex-app") else max_turns if max_turns is not None else (current or {}).get("max_turns"),
+                "allowed_tools": "" if executor in ("codex-herdr", "codex-app") else allowed_tools.strip() if allowed_tools is not None else (current or {}).get("allowed_tools", ""),
                 "projects": json.dumps(project_ids if project_ids is not None else (current or {}).get("projects", [])),
                 "auto_dispatch": int(auto_dispatch if auto_dispatch is not None else (current or {}).get("auto_dispatch", True)),
             }
@@ -213,19 +223,30 @@ class Dispatch:
         project = self._project_for(task, profile)  # None: general work, no repo
         machine = self._machine(profile)
         previous = self.store._row(
-            "SELECT session_id, branch FROM launcher_runs WHERE task_id = ? AND person_id = ? AND kind = 'task'"
-            " ORDER BY id DESC LIMIT 1", (task_id, person["id"]),
+            "SELECT session_id, branch FROM launcher_runs WHERE task_id = ? AND person_id = ? AND kind = 'task' AND executor = ?"
+            " ORDER BY id DESC LIMIT 1", (task_id, person["id"], profile["executor"]),
         )
         ts = now_iso()
         with self.store.tx() as c:
+            # Recheck under BEGIN IMMEDIATE: concurrent assignment/start requests serialize.
+            current_task = self.store.get_task(task_id)
+            if current_task["assignee_id"] != person["id"] or current_task["status"] in CLOSED_STATUSES:
+                raise Invalid("The task assignment changed or the task closed")
+            if self._active(task_id):
+                raise Invalid(f"{person['name']} is already on it")
+            uncertain = c.execute("SELECT id FROM launcher_runs WHERE task_id = ? AND "
+                                  "json_extract(launch, '$.status') IN ('needs_inspection', 'cancel_pending')",
+                                  (task_id,)).fetchone()
+            if uncertain:
+                raise Invalid(f"Inspect Herdr launch for run {uncertain['id']} before starting again")
             cur = c.execute(
                 "INSERT INTO launcher_runs (kind, customer_id, agent, label, cwd, mode, requested_at, task_id,"
-                " person_id, project_id, message, session_id, branch) VALUES ('task', ?, ?, ?, ?, 'background', ?, ?, ?, ?, ?, ?, ?)",
+                " person_id, project_id, message, session_id, branch, executor) VALUES ('task', ?, ?, ?, ?, 'background', ?, ?, ?, ?, ?, ?, ?, ?)",
                 (task["customer_id"], machine, f"{person['name']}: {task['title']}"[:200],
                  project["repo_path"] if project else None, ts, task_id, person["id"],
                  project["id"] if project else None, (message or "").strip() or None,
                  previous["session_id"] if previous else None,
-                 ((previous["branch"] if previous else None) or f"agent/{task_id}-{_slug(task['title'])}") if project else None),
+                 ((previous["branch"] if previous else None) or f"agent/{task_id}-{_slug(task['title'])}") if project else None, profile["executor"]),
             )
             what = "Sent back to" if message else "Queued for"
             self.store._log(task_id, "change", f"{what} {person['name']} on {machine}", source, ts, event="agent")
@@ -269,22 +290,38 @@ class Dispatch:
         kept; it dies with the run)."""
         knows_tasks = supports_tasks(version)
         kinds = ("tool", "task", "check") if knows_tasks and accept_tasks else ("tool",)
-        run = self.agents.claim(machine, kinds=kinds)
+        # Old machines must never consume an interactive Codex job as a Claude job.
+        excluded = () if _version(version) >= (1, 4) else ("codex-herdr", "codex-app")
+        run = self.agents.claim(machine, kinds=kinds, excluded_executors=excluded)
         if not run or run["kind"] == "tool":
             return run
         token = secrets.token_urlsafe(32)
         with self.store.tx() as c:
             c.execute("UPDATE launcher_runs SET token_hash = ? WHERE id = ?", (token_hash(token), run["id"]))
         full = self.agents.get_run(run["id"])
+        if full["status"] != "claimed":
+            return None
         profile = self.profile(full["person_id"]) if full["person_id"] else None
         project = self.store.get_project(full["project_id"]) if full["project_id"] else None
-        if not profile or (project and not project["repo_path"]):
+        if not profile or profile["executor"] != full["executor"] or (project and not project["repo_path"]):
             self.agents.report(run["id"], machine, status="failed", error="The agent or its project's repo is gone")
             return None
         task = self.store.get_task(full["task_id"]) if full["task_id"] else None
+        if task and (task["assignee_id"] != full["person_id"] or task["status"] in CLOSED_STATUSES):
+            self.report(run["id"], machine, status="failed", error="Task assignment changed or task closed before claim")
+            return None
         if task:
             prompt = (f"You are {full['person']}, working todo task {task['id']}: “{task['title']}”. "
                       f"Use the todo-worker skill: start with get_assignment. {VISIBLE}")
+            if profile["executor"] in ("codex-herdr", "codex-app"):
+                prompt = (f"Work todo task {task['id']}: {task['title']}. Start with todo_worker.get_assignment. "
+                          "Read AGENTS.md and work in this isolated worktree. Report progress through todo_worker. "
+                          "Ask if blocked; request_review when ready. Never mark the task done. "
+                          "Do not push, publish a PR, merge or deploy without user authorization. "
+                          "The user can join this work in the selected harness.")
+                instructions = self.people.get(full["person_id"]).get("notes") or ""
+                if instructions:
+                    prompt += f"\n\nYour agent role/context (follow repository and task rules):\n{instructions}"
             if full["message"]:
                 prompt += " The user replied on the task; get_assignment has it."
         else:
@@ -301,7 +338,7 @@ class Dispatch:
                         "default_branch": project["default_branch"]} if project else None,
             "branch": full["branch"],
             "session_id": full["session_id"],
-            "agent": {"name": full["person"], "claude_agent": profile["claude_agent"], "model": profile["model"],
+            "agent": {"executor": profile["executor"], "name": full["person"], "instructions": self.people.get(full["person_id"]).get("notes") or "", "claude_agent": profile["claude_agent"], "model": profile["model"],
                       "max_turns": profile["max_turns"], "allowed_tools": profile["allowed_tools"]},
         }
 
@@ -416,8 +453,12 @@ class Dispatch:
             "files": [{"id": f["id"], "name": f["name"], "bytes": f["bytes"], "source": f["source"]}
                       for f in self.attachments.for_task(task["id"])],
             "repo": repo,
-            "deliver": VISIBLE,
-            "how": ("Work in the current directory (a git worktree on the branch above). report_progress at "
+            "deliver": "The user can join your selected Codex harness; report progress and request_review on the task." if run.get("executor") in ("codex-herdr", "codex-app") else VISIBLE,
+            "how": ("Work in the current isolated folder (worktree for a repository, scratch folder otherwise). "
+                    "Deliver findings/files on the task with add_note/attach_file or ./outputs/. "
+                    "report_progress at milestones; ask if blocked. "
+                    "request_review when ready. Never mark done, merge or deploy. Push or publish a PR only "
+                    "with user authorization.") if run.get("executor") in ("codex-herdr", "codex-app") else ("Work in the current directory (a git worktree on the branch above). report_progress at "
                     "milestones; ask() if you're blocked on a decision; when the work is ready, push the "
                     "branch, open a PR, and request_review with the PR URL. Never merge or deploy.") if repo else
                    ("General work, no repo: the current directory is a scratch folder for this task (kept between "
@@ -583,7 +624,8 @@ class Dispatch:
             checks.append({"check": name, "ok": ok, "detail": detail, **({"fix": fix} if not ok and fix else {})})
 
         name = profile.get("claude_agent")
-        check("profile", bool(profile), f"runs as the Claude agent “{name}”" if profile
+        codex = profile.get("executor") in ("codex-herdr", "codex-app")
+        check("profile", bool(profile), f"Codex harness: {profile['executor']}" if codex else f"runs as the Claude agent “{name}”" if profile
               else "no profile", "save_agent with claude_agent")
         projects = [self.store.get_project(p) for p in profile.get("projects", [])]
         if project is not None:
@@ -595,6 +637,10 @@ class Dispatch:
                         for p in repos)
               + ("; " if repos else "")
               + f"tasks without a repo: a scratch folder, agent file ~/.claude/agents/{name}.md on the machine")
+        if codex:
+            checks[-1] = {"check": "where it works", "ok": True,
+                          "detail": "All projects by default; optional project limits on the agent. Repositories use isolated worktrees; "
+                                    "general tasks use scratch folders. Harness setup is machine-wide, not per client/project."}
         machines = {m["name"]: m for m in self.agents.list()}
         try:
             target = self._machine(profile) if profile else None
@@ -605,13 +651,18 @@ class Dispatch:
         m = machines.get(target or "")
         check("machine", bool(m and m["online"]), f"{target}: {'online' if m and m['online'] else 'offline'}"
               if target else why, "Start todo-agent there, or save_agent with machine")
-        check("todo-agent version", bool(m and supports_tasks(m["version"])),
-              f"{m['version'] or 'unknown'} (needs {'.'.join(map(str, AGENT_MIN_VERSION))}+)" if m else "no machine",
+        minimum = (1, 4) if codex else AGENT_MIN_VERSION
+        check("todo-agent version", bool(m and _version(m["version"]) >= minimum),
+              f"{m['version'] or 'unknown'} (needs {'.'.join(map(str, minimum))}+)" if m else "no machine",
               "Re-run the installer: curl -fsSL <todo>/agent/install.sh | sh")
         last_check = self.store._row(
             "SELECT id, status, outcome, error, finished_at FROM launcher_runs WHERE person_id = ? AND kind = 'check'"
             " ORDER BY id DESC LIMIT 1", (info["id"],),
         )
+        if codex:
+            check("local routing", False, "Harness readiness is machine-local: Herdr session or existing connected Codex app daemon",
+                  "Use isolated integration tests, then an authorized real task on the selected machine")
+            return {"agent": info["name"], "executor": profile["executor"], "ok": False, "checks": checks}
         if last_check:
             passed = last_check["outcome"] == "ready" and last_check["status"] == "succeeded"
             check("smoke run", passed, f"run {last_check['id']}: {last_check['status']}"
@@ -620,7 +671,7 @@ class Dispatch:
                   "~/.claude/agents on the machine) and claude must be logged in")
         else:
             check("smoke run", False, "not run yet", "test_agent runs one")
-        return {"agent": info["name"], "ok": all(c["ok"] for c in checks), "checks": checks}
+        return {"agent": info["name"], "executor": profile.get("executor", "claude"), "ok": all(c["ok"] for c in checks), "checks": checks}
 
     def test_agent(self, agent: int | str, project: int | str | None = None) -> dict[str, Any]:
         """Queue a check run: claude --agent in a worktree of the project's repo (the given one,
@@ -630,6 +681,8 @@ class Dispatch:
         profile = self.profile(info["id"])
         if not profile:
             raise Invalid("Save the agent's profile first (save_agent)")
+        if profile["executor"] in ("codex-herdr", "codex-app"):
+            raise Invalid("Codex harness setup is machine-wide; use an authorized task to verify the selected route")
         if project is not None:
             proj = self.store.resolve_project(project)
         else:

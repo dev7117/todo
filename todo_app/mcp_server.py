@@ -90,6 +90,15 @@ Ideas (you write these directly)
   ideas the user floats become ideas. When unsure, it's an idea.
 - Check list_ideas before capturing so you extend an existing idea instead of duplicating it.
 
+Agent assignments
+- save_agent(executor="codex-herdr" or "codex-app") selects a shared machine harness.
+  Requires todo-agent 1.4+. Projects are optional restrictions, not required setup.
+  Herdr uses the named default session unless overridden on the machine, and verifies
+  repository identity to reuse project workspaces. Codex app uses an already connected
+  local Remote daemon; Todo never enables or pairs it. Repository tasks get worktrees;
+  general tasks get isolated scratch folders. Permissions are answered by the user in
+  the selected harness. Agent completion requests always stay in Review.
+
 Customer hub (you write these directly)
 - get_customer reads a hub: its topics (the threads the customer keeps raising, each with
   "where things stand" and its latest updates), upcoming meetings with prep, recaps, projects,
@@ -1317,6 +1326,7 @@ async def list_agents() -> list[dict[str, Any]]:
 
 @_tool(WRITE)
 async def save_agent(
+    executor: Literal["claude", "codex-herdr", "codex-app"] | None = Field(None, description="Shared Codex harness: Herdr or already connected Codex app / Remote; requires todo-agent 1.4"),
     name: str = Field(description="The agent's name in the app, e.g. 'Maintainer'"),
     claude_agent: str | None = Field(None, description="Its agent file: .claude/agents/<claude_agent>.md in the repo"),
     machine: str | None = Field(None, description='Machine it runs on (list_machines); "" = the only one online'),
@@ -1329,7 +1339,7 @@ async def save_agent(
 ) -> dict[str, Any]:
     """Create or update an agent (a person of kind agent, plus how it runs). Only the fields
     given change. Assigning a task to it then starts it on its machine."""
-    agent = dispatch.save_agent(name, claude_agent=claude_agent, machine=machine, allowed_tools=allowed_tools,
+    agent = dispatch.save_agent(name, executor=executor, claude_agent=claude_agent, machine=machine, allowed_tools=allowed_tools,
                                 projects=projects, model=model, max_turns=max_turns, auto_dispatch=auto_dispatch,
                                 title=title)
     return {**agent, "last_run": _run_brief(agent["last_run"], 300) if agent["last_run"] else None}

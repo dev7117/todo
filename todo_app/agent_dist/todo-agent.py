@@ -17,6 +17,8 @@ you never approved. "Always allow" remembers that exact command; editing it asks
   todo-agent install      set it up to start at login (needs ~/.config/todo/agent.json)
   todo-agent uninstall    stop it and remove the login item
   todo-agent status       config, service state, connection check
+  todo-agent herdr-reconcile <run id>
+                          release an uncertain receipt only after its agent is closed
   todo-agent approvals    commands you've always-allowed;  `todo-agent forget` clears them
   todo-agent upload <meeting id> <file>… [--step <id>] [--note <text>]
                           attach files to a cadence meeting (reports, exports); scripts run
@@ -39,11 +41,32 @@ Config ~/.config/todo/agent.json: {"url": "...", "token": "...", "name": "MacBoo
 "repo_paths": {"<project name>": "~/code/elsewhere"}} (terminal is macOS only; Linux uses
 xdg-terminal-exec; claude defaults to the one on your login shell's PATH; repo_paths
 overrides a project's repo path on this machine). Standard library only, Python 3.9+.
+
+Shared Codex harnesses (todo-agent 1.4): codex-herdr uses the explicitly named default
+Herdr session, or agent.json {"herdr": {"session": "my-session"}}. No per-project routing
+is required: canonical Git common-dir identity reuses the project's workspace. Optional
+herdr_projects overrides can select a verified workspace/session/project_root. General
+work uses task scratch folders grouped under the machine's Todo workspace. herdr_cli
+defaults to herdr on PATH. No-focus creation and user approval prompts are preserved.
+codex-app connects with `codex app-server proxy` to an ALREADY connected local daemon.
+Optional {"codex_app": {"socket": "/path/to/control.sock"}} selects that daemon explicitly.
+It never starts/pairs/enables the daemon. Persistent project/thread/turn identities are
+recorded; permission requests are left to the native app/Remote. A private stdio MCP
+bridge consumes the one-use token ticket, keeping secrets out of shared daemon config,
+argv and environment. Old chats reopen with an offline worker, never restored tokens.
+Receipts under state/herdr/<server hash>/ cover both routes, survive restart and forbid
+uncertain retries. `herdr-reconcile RUN_ID` also verifies native recorded turn identity.
+Run credentials use a private 0600 one-use handoff in the 0700 launch namespace. A Python
+bootstrap consumes/unlinks it, then execs Codex --no-daemon with native bearer_token_env_var.
+No secret is sent as terminal input, argv, receipt metadata, or shell export. Model shells
+exclude that variable. Interrupted handoffs are removed on recovery; launches never retry.
+
 """
 from __future__ import annotations
 
 import glob
 import hashlib
+import base64
 import json
 import mimetypes
 import os
@@ -52,6 +75,7 @@ import re
 import shlex
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import threading
@@ -61,7 +85,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "1.2"
+VERSION = "1.4"
 MAC = sys.platform == "darwin"
 HOME = Path.home()
 # TODO_AGENT_HOME runs a second agent (e.g. against a local dev server) with its own config,
@@ -196,7 +220,8 @@ def ask(cfg: dict, run: dict) -> str:
     request = STATE / f"ask-{run['id']}.json"
     answer = STATE / f"ask-{run['id']}.answer"
     answer.unlink(missing_ok=True)
-    request.write_text(json.dumps({**run, "how": how}))
+    write_private_json(request, {"label": run["label"], "customer": run.get("customer"),
+                                     "command": run["command"], "cwd": run.get("cwd"), "how": how})
     subprocess.Popen(["xdg-terminal-exec", sys.executable, os.path.abspath(__file__), "prompt", str(request)],
                      start_new_session=True)
     deadline = time.time() + APPROVAL_TIMEOUT
@@ -378,13 +403,20 @@ def describe_agent(cfg: dict, run: dict) -> None:
     repo. The prompt and task change every run, so they're not part of it."""
     agent = run["agent"]
     run["cwd"] = repo_for(cfg, run) or "(a scratch folder, no repo)"
+    if agent.get("executor") == "codex-app":
+        run["command"] = "Codex app/Remote via existing connected local daemon (workspace-write, user approvals) " + json.dumps(cfg.get("codex_app") or {}, sort_keys=True) + " model=" + str(agent.get("model"))
+        return
+    if agent.get("executor") == "codex-herdr":
+        route = herdr_route(cfg, run)
+        run["command"] = "codex (workspace-write, on-request) in Herdr " + json.dumps(route, sort_keys=True) + " model=" + str(agent.get("model"))
+        return
     run["command"] = (f"claude --agent {agent['claude_agent']}"
                       + (f" --model {agent['model']}" if agent.get("model") else "")
                       + f" --allowedTools {shlex.quote(agent.get('allowed_tools') or '(defaults)')}")
 
 
 def git(repo: str, *args: str) -> str:
-    result = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+    result = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=60)
     if result.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)}: {(result.stderr or result.stdout).strip()}")
     return result.stdout.strip()
@@ -397,7 +429,15 @@ def workspace(run: dict, repo) -> str:
         path = STATE / "workspaces" / (f"check-{run['id']}" if run["kind"] == "check" else f"task-{run['task_id']}")
         (path / "outputs").mkdir(parents=True, exist_ok=True)
         return str(path)
-    return worktree(run, repo)
+    # Git fetch/worktree setup writes shared refs/config. Serialize setup only;
+    # task execution remains parallel, including across daemon processes.
+    import fcntl
+    locks = STATE / "repo-locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(common_dir(repo).encode()).hexdigest()
+    with (locks / key).open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return worktree(run, repo)
 
 
 def worktree(run: dict, repo: str) -> str:
@@ -519,20 +559,852 @@ def attach_outputs_to_task(cfg: dict, run: dict, path: str) -> str:
     return ("\n".join(lines) + "\n") if lines else ""
 
 
+# ----- opt-in interactive Codex assignments (no external launcher dependency) -----
+
+TOKEN_ENV = "TODO_WORKER_RUN_TOKEN"
+
+
+def codex_native_args(cfg: dict, run: dict, cwd: str) -> list[str]:
+    """Native config contains a credential variable name, never a credential value."""
+    args = ["codex", "--no-daemon", "--cd", cwd, "--sandbox", "workspace-write",
+            "--ask-for-approval", "on-request", "-c",
+            'mcp_servers={todo_worker={url=' + json.dumps(cfg["url"] + run["mcp_path"])
+            + ',bearer_token_env_var="' + TOKEN_ENV + '",required=true}}',
+            "-c", 'shell_environment_policy={inherit="all",ignore_default_excludes=false,filters={'
+            + TOKEN_ENV + '="exclude"}}']
+    if run["agent"].get("model"):
+        args += ["--model", run["agent"]["model"]]
+    return args
+
+
+def receipt_files(folder: Path):
+    return (p for p in folder.glob("run-*.json") if re.fullmatch(r"run-[0-9]+\.json", p.name))
+
+
+def handoff_path(receipt: Path) -> Path:
+    return receipt.with_suffix(".handoff.json")
+
+
+def write_private_json(path: Path, data: dict) -> None:
+    """Apply owner-only permissions before writing a task-runtime secret."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            raise RuntimeError("Unsafe private task configuration file")
+        os.fchmod(stream.fileno(), 0o600)
+        os.ftruncate(stream.fileno(), 0)
+        json.dump(data, stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def write_one_use_handoff(receipt: Path, data: dict) -> Path:
+    """A single-use private file outside the repository, created before terminal input."""
+    path = handoff_path(receipt)
+    parent = path.parent.stat()
+    if parent.st_uid != os.getuid() or stat.S_IMODE(parent.st_mode) != 0o700:
+        raise RuntimeError("Codex handoff directory must be private and owned by this user")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(data, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    return path
+
+
+def write_codex_handoff(receipt: Path, cfg: dict, run: dict, cwd: str) -> Path:
+    return write_one_use_handoff(receipt, {"token": run["token"], "argv": codex_native_args(cfg, run, cwd)})
+
+
+def write_worker_handoff(receipt: Path, cfg: dict, run: dict) -> Path:
+    return write_one_use_handoff(receipt, {"kind": "worker", "token": run["token"], "url": cfg["url"] + run["mcp_path"]})
+
+
+def consume_private_handoff(path: Path) -> dict:
+    """Validate, consume and unlink before exec; values must never be printed."""
+    import fcntl
+    parent = path.parent.stat()
+    if parent.st_uid != os.getuid() or stat.S_IMODE(parent.st_mode) != 0o700:
+        raise RuntimeError("Unsafe Codex handoff directory")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "r") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600:
+            raise RuntimeError("Unsafe Codex handoff file")
+        if info.st_size > 64_000:
+            raise RuntimeError("Codex handoff is too large")
+        try:
+            data = json.load(stream)
+        finally:
+            # Never leave an unread or malformed credential on disk after consumption.
+            current = path.lstat()
+            if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+                raise RuntimeError("Codex handoff identity changed")
+            path.unlink()
+            parent_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(parent_fd)
+            finally:
+                os.close(parent_fd)
+    return data
+
+
+def consume_codex_handoff(path: Path) -> dict:
+    data = consume_private_handoff(path)
+    if (not isinstance(data, dict) or not isinstance(data.get("token"), str) or not data["token"]
+            or not isinstance(data.get("argv"), list) or not data["argv"] or data["argv"][0] != "codex"
+            or not all(isinstance(a, str) and data["token"] not in a for a in data["argv"])):
+        raise RuntimeError("Invalid Codex handoff")
+    return data
+
+
+def codex_herdr_bootstrap(path: Path) -> None:
+    data = consume_codex_handoff(path)
+    env = os.environ.copy()
+    env[TOKEN_ENV] = data["token"]
+    # Direct exec: no shell substitution, secret shell export, or extra token argv.
+    os.execvpe("codex", data["argv"], env)
+
+
+def start_codex_handoff(cfg: dict, record: dict, ticket: Path) -> None:
+    existing = herdr_call(cfg, record["session"], "agent", "list")["agents"]
+    if any(a.get("pane_id") == record["pane_id"] or a.get("name") == record["agent_name"] for a in existing):
+        raise RuntimeError("New Codex pane or launch name is already occupied; no command was sent")
+    command = shlex.join([sys.executable, str(Path(__file__).resolve()), "codex-herdr-bootstrap", str(ticket)])
+    herdr_call(cfg, record["session"], "pane", "run", record["pane_id"], command)
+    # No retries of pane run. Only observe this newly created pane.
+    deadline = time.monotonic() + 30
+    named = False
+    while True:
+        agents = herdr_call(cfg, record["session"], "agent", "list")["agents"]
+        if any(a.get("name") == record["agent_name"] and a.get("pane_id") != record["pane_id"] for a in agents):
+            raise RuntimeError("New Codex launch name is already in use")
+        agent = next((a for a in agents if a.get("pane_id") == record["pane_id"]), None)
+        if agent:
+            if ticket.exists():
+                raise RuntimeError("New pane agent did not consume the credential handoff; refusing to adopt it")
+            if agent.get("agent") != "codex" or not agent.get("terminal_id"):
+                raise RuntimeError("Unexpected occupant of the new Codex pane")
+            if record.get("terminal_id") and record["terminal_id"] != agent["terminal_id"]:
+                raise RuntimeError("New Codex terminal identity changed")
+            record["terminal_id"] = agent["terminal_id"]
+            if not named:
+                herdr_call(cfg, record["session"], "agent", "rename", record["pane_id"], record["agent_name"])
+                named = True
+            current = owned_agent(cfg, record)
+            if current.get("agent_status") == "blocked":
+                raise RuntimeError("New Codex requires manual startup input in Herdr")
+            if current.get("interactive_ready") and current.get("agent_status") in ("idle", "done"):
+                return
+        if time.monotonic() >= deadline:
+            raise RuntimeError("New Codex did not become ready; inspect its pane before retrying")
+        time.sleep(0.25)
+
+
+def receipt_data(record: dict) -> dict:
+    """Receipts are recovery metadata, never a credential store (including older drafts)."""
+    token = (record.get("run") or {}).get("token")
+    def clean(value):
+        if isinstance(value, dict):
+            return {key: clean(v) for key, v in value.items() if key not in ("token", "token_hash")}
+        if isinstance(value, list):
+            return [clean(v) for v in value]
+        if isinstance(value, str) and token:
+            return value.replace(token, "[redacted]")
+        return value
+    return clean(record)
+
+
+def task_error(exc: Exception, run: dict) -> str:
+    text = str(exc)
+    if run.get("token"):
+        text = text.replace(run["token"], "[redacted]")
+    return text[:2000]
+
+
+def herdr_call(cfg: dict, session: str, *args: str) -> dict:
+    """Every command targets the selected session, never the focused session."""
+    command = [cfg.get("herdr_cli", "herdr"), "--session", session, *args]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=40)
+    if result.returncode:
+        # Terminal diagnostics may contain private process output; never forward them.
+        raise RuntimeError(f"Herdr {args[0]} operation failed (exit {result.returncode}); inspect the recorded pane")
+    data = json.loads(result.stdout)
+    if data.get("error"):
+        raise RuntimeError("Herdr operation failed; inspect the recorded pane")
+    return data.get("result", data)
+
+
+def common_dir(path: str) -> str:
+    raw = git(path, "rev-parse", "--git-common-dir")
+    return str((Path(raw) if Path(raw).is_absolute() else Path(path) / raw).resolve())
+
+
+def canonical_root(repo: str) -> str:
+    """Git's primary worktree, verified by common-dir; no project-name guessing."""
+    for line in git(repo, "worktree", "list", "--porcelain").splitlines():
+        if line.startswith("worktree "):
+            root = str(Path(line[9:]).resolve())
+            if common_dir(root) != common_dir(repo):
+                raise RuntimeError("Repository primary-worktree identity mismatch")
+            return root
+    raise RuntimeError("Cannot establish the repository's primary worktree")
+
+
+def harness_location(cfg: dict, run: dict) -> dict:
+    repo = repo_for(cfg, run)
+    if repo:
+        repo = str(Path(repo).resolve())
+        return {"repo": repo, "project_root": canonical_root(repo)}
+    return {"repo": None, "project_root": str((STATE / "workspaces").resolve())}
+
+
+def herdr_route(cfg: dict, run: dict) -> dict:
+    if run.get("kind") != "task":
+        raise RuntimeError("Codex harnesses execute task assignments, not legacy setup checks")
+    location = harness_location(cfg, run)
+    # One named session per machine. Per-project entries are optional overrides only.
+    defaults = cfg.get("herdr") or {}
+    project = run.get("project") or {}
+    override = (cfg.get("herdr_projects") or {}).get(str(project.get("id")))
+    if override is None:
+        override = (cfg.get("herdr_projects") or {}).get(project.get("name"))
+    route = {"session": defaults.get("session", "default"), **(override or {})}
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", route.get("session", "")):
+        raise RuntimeError("Set the machine's herdr.session to an explicit running session name")
+    if route.get("project_root"):
+        root = Path(os.path.expanduser(route["project_root"]))
+        if not location["repo"] or not root.is_absolute() or not root.is_dir() or common_dir(str(root)) != common_dir(location["repo"]):
+            raise RuntimeError("Herdr project_root must be a checkout of the task repository")
+        location["project_root"] = str(root.resolve())
+    if not location["repo"] and defaults.get("general_workspace"):
+        route["workspace"] = defaults["general_workspace"]
+    if run["agent"].get("allowed_tools") or run["agent"].get("max_turns"):
+        raise RuntimeError("Claude allowed_tools/max_turns cannot be translated to Codex")
+    return {**route, **location}
+
+
+def location_key(path: str, route: dict) -> str | None:
+    candidate = Path(path)
+    if not candidate.is_absolute() or not candidate.is_dir():
+        return None
+    candidate = candidate.resolve()
+    root = Path(route["project_root"])
+    if not route["repo"] and (candidate == root or root in candidate.parents):
+        return "scratch:" + str(root)
+    try:
+        return common_dir(str(candidate))
+    except RuntimeError:
+        return "directory:" + str(candidate)
+
+
+def herdr_workspace(cfg: dict, route: dict) -> str | None:
+    session = route["session"]
+    # Session list is a local discovery command and does not use inherited pane context.
+    result = subprocess.run([cfg.get("herdr_cli", "herdr"), "session", "list", "--json"],
+                            capture_output=True, text=True, timeout=10)
+    if result.returncode or not any(s["name"] == session and s["running"]
+                                  for s in json.loads(result.stdout)["sessions"]):
+        raise RuntimeError("Selected Herdr session is absent or stopped")
+    explicit = route.get("workspace")
+    workspaces = ([herdr_call(cfg, session, "workspace", "get", explicit)["workspace"]] if explicit else
+                  herdr_call(cfg, session, "workspace", "list")["workspaces"])
+    matches, unknown = [], []
+    identity = location_key(route["project_root"], route)
+    for ws in workspaces:
+        wid = ws["workspace_id"]
+        paths = [(ws.get("worktree") or {}).get("checkout_path")]
+        paths += [p.get("foreground_cwd") or p.get("cwd")
+                  for p in herdr_call(cfg, session, "pane", "list", "--workspace", wid)["panes"]]
+        keys = set()
+        for path in filter(None, paths):
+            try:
+                key = location_key(path, route)
+                if key:
+                    keys.add(key)
+            except (RuntimeError, OSError):
+                pass
+        if identity in keys:
+            matches.append(wid)
+        elif not keys:
+            unknown.append(wid)
+    if len(matches) == 1:
+        return matches[0]
+    if explicit or matches or unknown:
+        raise RuntimeError("Herdr workspace identity is ambiguous or mismatched; select a verified workspace explicitly")
+    return None
+
+
+def save_receipt(path: Path, data: dict) -> None:
+    """Atomic durable state, private even with a permissive user umask."""
+    tmp = path.with_suffix(".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as stream:
+        json.dump(receipt_data(data), stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(tmp, path)
+    fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def launch_public(record: dict) -> dict:
+    return {k: record[k] for k in ("session", "workspace", "tab", "pane_id", "agent_name", "cwd",
+                                 "project_root", "terminal_id", "route", "thread_id", "turn_id", "codex_project", "remote_server", "app_installation", "status", "error") if k in record}
+
+
+def owned_agent(cfg: dict, record: dict) -> dict:
+    agent = herdr_call(cfg, record["session"], "agent", "get", record["agent_name"])["agent"]
+    if (agent.get("name") != record["agent_name"] or agent.get("pane_id") != record["pane_id"]
+            or agent.get("agent") != "codex"
+            or (record.get("terminal_id") and agent.get("terminal_id") != record["terminal_id"])):
+        raise RuntimeError("Recorded Herdr agent identity changed; manual inspection required")
+    return agent
+
+
+def monitor_herdr(cfg: dict, record: dict, receipt: Path) -> None:
+    """Observe only our new agent. Blocked/unknown never imply completion."""
+    run = record["run"]
+    while True:
+        response = api(cfg, f"/api/agent/runs/{run['id']}",
+                       {"name": cfg["name"], "launch": launch_public(record)})
+        if response["status"] == "cancelled":
+            record["status"] = "cancel_pending"
+            save_receipt(receipt, record)
+            api(cfg, f"/api/agent/runs/{run['id']}", {"name": cfg["name"], "launch": launch_public(record)})
+            owned_agent(cfg, record)
+            # Named-agent input is identity-validated by Herdr. Never close a raw pane:
+            # its occupant could change between a read and a destructive close.
+            herdr_call(cfg, record["session"], "agent", "send-keys", record["agent_name"], "ctrl+c")
+            deadline = time.monotonic() + 10
+            while owned_agent(cfg, record).get("agent_status", "unknown") not in ("idle", "done"):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Cancellation sent; agent has not settled. Inspect the pane; no automatic retry")
+                time.sleep(0.25)  # observe the one interrupt; never send it again
+            public = launch_public(record)
+            public["status"] = "cancelled"
+            api(cfg, f"/api/agent/runs/{run['id']}", {"name": cfg["name"], "launch": public})
+            record["status"] = "cancelled"
+            save_receipt(receipt, record)
+            return
+        if response["status"] in ("failed", "expired", "declined"):
+            raise RuntimeError("Server run ended while its interactive agent may still be alive")
+        agent = owned_agent(cfg, record)
+        status = agent.get("agent_status", "unknown")
+        record["status"] = status
+        record["saw_activity"] = record.get("saw_activity", False) or status in ("working", "blocked")
+        save_receipt(receipt, record)
+        if status in ("idle", "done") and (record["saw_activity"] or response.get("outcome") in ("review", "question")):
+            attached = attach_outputs_to_task(cfg, run, record["cwd"])
+            public = launch_public(record)
+            public["status"] = "finished"
+            api(cfg, f"/api/agent/runs/{run['id']}", {"name": cfg["name"], "status": "succeeded",
+                                                 "output": attached or None, "launch": public})
+            record["status"] = "finished"
+            save_receipt(receipt, record)
+            return
+        if not record["saw_activity"] and time.time() - record.get("submitted_at", time.time()) > 15:
+            raise RuntimeError("No prompt activity observed; inspect the pane before retrying")
+        time.sleep(2)
+
+
+def run_herdr(cfg: dict, run: dict) -> None:
+    import fcntl  # Linux opt-in; existing macOS/general/tool execution stays unchanged
+    route = herdr_route(cfg, run)
+    namespace = hashlib.sha256(cfg["url"].encode()).hexdigest()[:12]
+    folder = STATE / "herdr" / namespace
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    receipt = folder / f"run-{run['id']}.json"
+    with (folder / f"task-{run['task_id']}.lock").open("a") as task_lock:
+        fcntl.flock(task_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Even a cancelled/failed server run may own a live terminal after network loss.
+        for previous in receipt_files(folder):
+            record = json.loads(previous.read_text())
+            if record["run"]["task_id"] == run["task_id"] and record["status"] not in ("finished", "cancelled"):
+                raise RuntimeError(f"Inspect existing Herdr receipt {previous}; automatic relaunch refused")
+        if receipt.exists():
+            raise RuntimeError("This run already has a one-shot launch receipt")
+        path = workspace(run, route["repo"])
+        if route["repo"] and (common_dir(path) != common_dir(route["project_root"]) or git(path, "branch", "--show-current") != run["branch"]):
+            raise RuntimeError("Task worktree repository or branch does not match the assignment")
+        record = {"run": receipt_data({"run": run})["run"], "session": route["session"], "project_root": route["project_root"],
+                  "cwd": path, "agent_name": f"todo-{namespace[:6]}-{run['id']}", "status": "prepared"}
+        try:
+            # Serialize project workspace resolution/creation across tasks and processes.
+            with (folder / "topology.lock").open("a") as topology:
+                fcntl.flock(topology, fcntl.LOCK_EX)
+                wid = herdr_workspace(cfg, route)
+                record.update(workspace=wid, status="creating")
+                save_receipt(receipt, record)  # before the first mutation
+                api(cfg, f"/api/agent/runs/{run['id']}", {"name": cfg["name"], "launch": launch_public(record)})
+                if api(cfg, f"/api/agent/runs/{run['id']}", {"name": cfg["name"]})["status"] == "cancelled":
+                    record["status"] = "cancelled"
+                    save_receipt(receipt, record)
+                    return
+                args = (["tab", "create", "--workspace", wid] if wid else ["workspace", "create"])
+                result = herdr_call(cfg, route["session"], *args, "--cwd", path,
+                                    "--label", run["label"] if wid else (run.get("project") or {}).get("name", "Todo assignments"), "--no-focus")
+                record.update(workspace=wid or result["workspace"]["workspace_id"],
+                              pane_id=result["root_pane"]["pane_id"], tab=result["tab"]["tab_id"], status="starting")
+                if result["root_pane"].get("terminal_id"):
+                    record["terminal_id"] = result["root_pane"]["terminal_id"]
+                save_receipt(receipt, record)
+            # Native Codex config; no Claude flags, approval bypass, HOME changes or fabricated HERDR_ENV.
+            if api(cfg, f"/api/agent/runs/{run['id']}", {"name": cfg["name"]})["status"] == "cancelled":
+                record["status"] = "cancelled"
+                save_receipt(receipt, record)
+                report(cfg, run["id"], launch=launch_public(record))
+                return
+            ticket = write_codex_handoff(receipt, cfg, run, path)
+            start_codex_handoff(cfg, record, ticket)
+            agent = owned_agent(cfg, record)
+            if not agent.get("terminal_id"):
+                raise RuntimeError("Herdr did not return a stable terminal identity")
+            record["terminal_id"] = agent["terminal_id"]
+            record["status"] = "submitting"
+            save_receipt(receipt, record)
+            if api(cfg, f"/api/agent/runs/{run['id']}", {"name": cfg["name"]})["status"] == "cancelled":
+                record["status"] = "cancelled"  # fresh idle agent has received no task prompt
+                api(cfg, f"/api/agent/runs/{run['id']}", {"name": cfg["name"], "launch": launch_public(record)})
+                save_receipt(receipt, record)
+                return
+            # One submission only. A timeout is uncertain, never a reason to resend.
+            herdr_call(cfg, route["session"], "agent", "prompt", record["agent_name"], run["prompt"])
+            record["status"] = "submitted"
+            record["submitted_at"] = time.time()
+            save_receipt(receipt, record)
+            report(cfg, run["id"], status="running", branch=run["branch"], launch=launch_public(record),
+                   output=f"[Codex in Herdr {record['session']} / {record['workspace']} / {record['pane_id']}]\n")
+            monitor_herdr(cfg, record, receipt)
+        except Exception as exc:
+            message = task_error(exc, run)
+            record.update(status="needs_inspection", error=message)
+            save_receipt(receipt, record)
+            report(cfg, run["id"], status="failed", error=message, launch=launch_public(record))
+            raise RuntimeError(message) from None
+        finally:
+            handoff_path(receipt).unlink(missing_ok=True)
+
+
+# ----- native Codex app / connected-computer assignments -----
+
+class LocalWebSocket:
+    """WebSocket client over the native raw-byte proxy; no TCP listener or dependencies."""
+    LIMIT = 16 * 1024 * 1024
+
+    def __init__(self, incoming, outgoing):
+        self.incoming, self.outgoing = incoming, outgoing
+        self.lock = threading.Lock()
+        self.ready = threading.Event()
+        self.key = base64.b64encode(os.urandom(16)).decode()
+        self.outgoing.write(("GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n"
+                             "Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: "
+                             + self.key + "\r\n\r\n").encode())
+        self.outgoing.flush()
+
+    def exact(self, size):
+        data = bytearray()
+        while len(data) < size:
+            part = self.incoming.read(size - len(data))
+            if not part:
+                raise RuntimeError("Native transport closed")
+            data.extend(part)
+        return bytes(data)
+
+    def handshake(self):
+        header = bytearray()
+        while not header.endswith(b"\r\n\r\n"):
+            if len(header) >= 16384:
+                raise RuntimeError("Invalid native handshake")
+            header.extend(self.exact(1))
+        lines = header.decode("ascii").split("\r\n")
+        fields = dict(line.split(":", 1) for line in lines[1:] if ":" in line)
+        fields = {k.lower(): v.strip() for k, v in fields.items()}
+        expected = base64.b64encode(hashlib.sha1((self.key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+        if (lines[0].split()[1] != "101" or fields.get("sec-websocket-accept") != expected
+                or fields.get("upgrade", "").lower() != "websocket"
+                or "upgrade" not in fields.get("connection", "").lower()):
+            raise RuntimeError("Native WebSocket handshake rejected; no task launched")
+        self.ready.set()
+
+    def frame(self, payload, opcode=1):
+        import struct
+        if len(payload) > self.LIMIT:
+            raise RuntimeError("Native message exceeds transport limit")
+        size = len(payload)
+        length = bytes([size | 128]) if size < 126 else (b"\xfe" + struct.pack("!H", size) if size <= 65535 else b"\xff" + struct.pack("!Q", size))
+        mask = os.urandom(4)
+        data = bytes(value ^ mask[i % 4] for i, value in enumerate(payload))
+        with self.lock:
+            self.outgoing.write(bytes([128 | opcode]) + length + mask + data)
+            self.outgoing.flush()
+
+    def message(self):
+        import struct
+        fragments = bytearray()
+        started = False
+        while True:
+            first, second = self.exact(2)
+            final, opcode = bool(first & 128), first & 15
+            if first & 112 or second & 128:
+                raise RuntimeError("Invalid native WebSocket frame")
+            size = second & 127
+            if size == 126: size = struct.unpack("!H", self.exact(2))[0]
+            elif size == 127: size = struct.unpack("!Q", self.exact(8))[0]
+            if size > self.LIMIT or len(fragments) + size > self.LIMIT:
+                raise RuntimeError("Native message exceeds transport limit")
+            if opcode >= 8 and (not final or size > 125):
+                raise RuntimeError("Invalid native control frame")
+            payload = self.exact(size)
+            if opcode == 8: raise RuntimeError("Native transport closed")
+            if opcode == 9:
+                self.frame(payload, 10)
+                continue
+            if opcode == 10: continue
+            if opcode == 1 and not started: started = True
+            elif opcode != 0 or not started: raise RuntimeError("Invalid native message frame")
+            fragments.extend(payload)
+            if final: return json.loads(fragments.decode("utf-8"))
+
+
+class CodexAppServer:
+    """Stdio proxy to an existing local daemon. Never start, stop, pair or enable it."""
+    def __init__(self, cfg: dict):
+        import queue
+        self.inbox = queue.Queue(maxsize=256)
+        self.blocked = set()
+        self.sequence = 0
+        command = [cfg.get("codex", "codex"), "app-server", "proxy"]
+        if (cfg.get("codex_app") or {}).get("socket"):
+            command += ["--sock", cfg["codex_app"]["socket"]]
+        self.proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.DEVNULL, bufsize=0)
+        try:
+            self.transport = LocalWebSocket(self.proc.stdout, self.proc.stdin)
+        except Exception:
+            self.close()
+            raise
+        def read():
+            try:
+                self.transport.handshake()
+                while True:
+                    self.inbox.put(self.transport.message())
+            except Exception:
+                pass  # no native diagnostic values in public logs
+            finally:
+                self.inbox.put(None)
+        threading.Thread(target=read, daemon=True).start()
+        try:
+            self.rpc("initialize", {"clientInfo": {"name": "todo_agent", "title": "Todo", "version": VERSION},
+                                    "capabilities": {"experimentalApi": True}})
+            self.send({"method": "initialized", "params": {}})
+        except Exception:
+            self.close()
+            raise
+
+    def send(self, message: dict) -> None:
+        if not self.transport.ready.wait(10):
+            raise RuntimeError("Native WebSocket handshake unavailable; no task launched")
+        self.transport.frame(json.dumps(message).encode())
+
+    def rpc(self, method: str, params: dict | None = None, timeout: float = 30) -> dict:
+        import queue
+        self.sequence += 1
+        rid = self.sequence
+        self.send({"id": rid, "method": method, "params": params or {}})
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"Codex app {method} response is uncertain; inspect the native task before retrying")
+            try:
+                message = self.inbox.get(timeout=remaining)
+            except queue.Empty:
+                raise RuntimeError(f"Codex app {method} timed out; inspect before retrying") from None
+            if message is None:
+                raise RuntimeError("Existing Codex daemon is unavailable; connect this machine in the app first")
+            if message.get("id") == rid and "method" not in message:
+                if "error" in message:
+                    raise RuntimeError(f"Codex app rejected {method}; check native compatibility and setup")
+                return message.get("result", {})
+            # Requests remain unanswered here. The native app/Remote owns user decisions.
+            tid = (message.get("params") or {}).get("threadId")
+            if "method" in message and "id" in message and tid:
+                self.blocked.add(tid)
+            if message.get("method") == "serverRequest/resolved" and tid:
+                self.blocked.discard(tid)
+
+    def close(self) -> None:
+        if self.proc.poll() is None:
+            self.proc.terminate()  # this proxy only, never the shared daemon or a model process
+            try:
+                self.proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait()
+
+
+def app_connected(client: CodexAppServer, record: dict | None = None) -> dict:
+    status = client.rpc("remoteControl/status/read")
+    if status.get("status") != "connected" or not status.get("installationId"):
+        state = status.get("status")
+        state = state if state in ("disabled", "connecting", "errored") else "unavailable"
+        raise RuntimeError("Native Codex Remote reports " + state + "; pairing alone does not establish a live connection. "
+                           "Resolve the host connection before starting this task; Todo will not enable or pair it automatically")
+    if record and status["installationId"] != record.get("app_installation"):
+        raise RuntimeError("Connected Codex installation changed; inspect the original task")
+    return status
+
+
+def app_project(client: CodexAppServer, route: dict, name: str, key: str) -> str:
+    matches, cursor = [], None
+    identity = location_key(route["project_root"], route)
+    while True:
+        page = client.rpc("project/list", {"limit": 100, "cursor": cursor})
+        for project in page["data"]:
+            roots = project.get("roots") or []
+            if any(location_key(r["path"], route) == identity for r in roots):
+                matches.append(project["id"])
+        cursor = page.get("nextCursor")
+        if not cursor:
+            break
+    if len(matches) > 1:
+        raise RuntimeError("Several native Codex projects match this repository; resolve that ambiguity in the app")
+    if matches:
+        return matches[0]
+    return client.rpc("project/create", {"name": name, "roots": [{"path": route["project_root"]}],
+                                          "idempotencyKey": "todo-" + key})["project"]["id"]
+
+
+def worker_stdio_config(ticket: Path) -> dict:
+    # Only a private file path, not the token, enters the shared daemon's persisted config.
+    return {"mcp_servers": {"todo_worker": {"command": sys.executable,
+            "args": [str(Path(__file__).resolve()), "codex-worker-proxy", str(ticket)], "required": True}}}
+
+
+def app_owned_thread(client: CodexAppServer, record: dict) -> dict:
+    thread = client.rpc("thread/read", {"threadId": record["thread_id"], "includeTurns": False})["thread"]
+    if (thread.get("id") != record["thread_id"] or str(Path(thread.get("cwd", "")).resolve()) != record["cwd"]
+            or thread.get("projectId") != record["codex_project"]):
+        raise RuntimeError("Recorded native Codex task identity changed; no control command sent")
+    return thread
+
+
+def app_turn(client: CodexAppServer, record: dict) -> dict:
+    cursor = None
+    while True:
+        page = client.rpc("thread/turns/list", {"threadId": record["thread_id"], "limit": 100,
+                                                "itemsView": "notLoaded", "sortDirection": "desc", "cursor": cursor})
+        turn = next((t for t in page["data"] if t["id"] == record["turn_id"]), None)
+        if turn:
+            return turn
+        cursor = page.get("nextCursor")
+        if not cursor:
+            raise RuntimeError("Recorded native Codex turn is unavailable; inspect before retrying")
+
+
+def monitor_codex_app(cfg: dict, record: dict, receipt: Path, client: CodexAppServer | None = None) -> None:
+    owned_connection = client is None
+    client = client or CodexAppServer(cfg)
+    try:
+        app_connected(client, record)
+        run = record["run"]
+        while True:
+            response = api(cfg, f"/api/agent/runs/{run['id']}", {"name": cfg["name"], "launch": launch_public(record)})
+            thread = app_owned_thread(client, record)
+            turn = app_turn(client, record)
+            if response["status"] == "cancelled":
+                if turn["status"] == "inProgress":
+                    record["status"] = "cancel_pending"
+                    save_receipt(receipt, record)
+                    client.rpc("turn/interrupt", {"threadId": record["thread_id"], "turnId": record["turn_id"]})
+                    # Interrupt is one-shot and scoped to this recorded turn. Observe only.
+                    deadline = time.monotonic() + 10
+                    while app_turn(client, record)["status"] == "inProgress":
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError("Native task interrupt is uncertain; inspect in Codex, no automatic retry")
+                        time.sleep(0.25)
+                record["status"] = "cancelled"
+                api(cfg, f"/api/agent/runs/{run['id']}", {"name": cfg["name"], "launch": launch_public(record)})
+                save_receipt(receipt, record)
+                return
+            if response["status"] in ("failed", "expired", "declined"):
+                raise RuntimeError("Todo run ended while its native task may still be active")
+            if turn["status"] in ("completed", "failed", "interrupted"):
+                record["status"] = "finished"
+                result = "succeeded" if turn["status"] == "completed" else "failed"
+                attached = attach_outputs_to_task(cfg, run, record["cwd"])
+                api(cfg, f"/api/agent/runs/{run['id']}", {"name": cfg["name"], "status": result,
+                        "output": attached or None, "launch": launch_public(record),
+                        "error": None if result == "succeeded" else "Native Codex turn " + turn["status"]})
+                save_receipt(receipt, record)
+                return
+            flags = (thread.get("status") or {}).get("activeFlags", [])
+            record["status"] = "blocked" if flags or record["thread_id"] in client.blocked else "working"
+            save_receipt(receipt, record)
+            time.sleep(2)
+    finally:
+        if owned_connection:
+            client.close()
+
+
+def run_codex_app(cfg: dict, run: dict) -> None:
+    import fcntl
+    route = harness_location(cfg, run)
+    namespace = hashlib.sha256(cfg["url"].encode()).hexdigest()[:12]
+    folder = STATE / "herdr" / namespace  # common legacy receipt namespace prevents cross-route duplicates
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    receipt = folder / f"run-{run['id']}.json"
+    with (folder / f"task-{run['task_id']}.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        for previous in receipt_files(folder):
+            prior = json.loads(previous.read_text())
+            if prior["run"]["task_id"] == run["task_id"] and prior["status"] not in ("finished", "cancelled"):
+                raise RuntimeError("Existing assignment receipt requires inspection; native launch refused")
+        if receipt.exists():
+            raise RuntimeError("This native run already has a one-shot receipt")
+        client = CodexAppServer(cfg)
+        try:
+            connected = app_connected(client)
+            path = workspace(run, route["repo"])
+            if route["repo"] and (common_dir(path) != common_dir(route["repo"]) or git(path, "branch", "--show-current") != run["branch"]):
+                raise RuntimeError("Native task worktree identity mismatch")
+            record = {"run": receipt_data({"run": run})["run"], "route": "codex-app", "cwd": path,
+                      "project_root": route["project_root"], "app_installation": connected["installationId"],
+                      "remote_server": connected.get("serverName"), "status": "creating"}
+            save_receipt(receipt, record)
+            api(cfg, f"/api/agent/runs/{run['id']}", {"name": cfg["name"], "launch": launch_public(record)})
+            if api(cfg, f"/api/agent/runs/{run['id']}", {"name": cfg["name"]})["status"] == "cancelled":
+                record["status"] = "cancelled"
+                save_receipt(receipt, record)
+                return
+            with (folder / "topology.lock").open("a") as topology:
+                fcntl.flock(topology, fcntl.LOCK_EX)
+                identity = location_key(route["project_root"], route)
+                record["codex_project"] = app_project(client, route, (run.get("project") or {}).get("name", "Todo assignments"),
+                                                       hashlib.sha256(identity.encode()).hexdigest())
+                save_receipt(receipt, record)
+            if api(cfg, f"/api/agent/runs/{run['id']}", {"name": cfg["name"]})["status"] == "cancelled":
+                record["status"] = "cancelled"
+                save_receipt(receipt, record)
+                return
+            ticket = write_worker_handoff(receipt, cfg, run)
+            params = {"cwd": path, "projectId": record["codex_project"], "ephemeral": False,
+                      "approvalPolicy": "on-request", "approvalsReviewer": "user", "sandbox": "workspace-write",
+                      "config": worker_stdio_config(ticket), "environments": [], "serviceName": "todo-agent"}
+            if run["agent"].get("model"):
+                params["model"] = run["agent"]["model"]
+            # A new persistent native thread per Todo run. Never attach to an arbitrary existing chat.
+            record["status"] = "starting"
+            save_receipt(receipt, record)
+            thread = client.rpc("thread/start", params)["thread"]
+            record["thread_id"] = thread["id"]
+            save_receipt(receipt, record)
+            if ticket.exists():
+                raise RuntimeError("Native worker credential handoff was not consumed; no task prompt sent")
+            app_owned_thread(client, record)
+            client.rpc("thread/name/set", {"threadId": record["thread_id"], "name": run["label"]})
+            record["status"] = "submitting"
+            save_receipt(receipt, record)
+            if api(cfg, f"/api/agent/runs/{run['id']}", {"name": cfg["name"]})["status"] == "cancelled":
+                record["status"] = "cancelled"
+                save_receipt(receipt, record)
+                return
+            turn = client.rpc("turn/start", {"threadId": record["thread_id"], "input": [{"type": "text", "text": run["prompt"]}]})["turn"]
+            record.update(turn_id=turn["id"], status="submitted")
+            save_receipt(receipt, record)
+            api(cfg, f"/api/agent/runs/{run['id']}", {"name": cfg["name"], "status": "running", "session_id": record["thread_id"],
+                    "branch": run.get("branch"), "launch": launch_public(record),
+                    "output": "[Native Codex task on " + (record.get("remote_server") or "connected computer") + "]\n"})
+            monitor_codex_app(cfg, record, receipt, client)
+        except Exception as exc:
+            if "record" in locals():
+                message = task_error(exc, run)
+                record.update(status="needs_inspection", error=message)
+                save_receipt(receipt, record)
+                report(cfg, run["id"], status="failed", error=message, launch=launch_public(record))
+            raise RuntimeError(task_error(exc, run)) from None
+        finally:
+            handoff_path(receipt).unlink(missing_ok=True)
+            client.close()
+
+
+def worker_proxy_offline(message: dict) -> dict:
+    method = message.get("method")
+    if method == "initialize":
+        return {"protocolVersion": message.get("params", {}).get("protocolVersion", "2025-03-26"),
+                "capabilities": {"tools": {}}, "serverInfo": {"name": "todo-worker-offline", "version": VERSION},
+                "instructions": "This Todo run is no longer connected. Use Todo to start a fresh scoped run; never mark its task done directly."}
+    if method == "tools/list":
+        return {"tools": []}
+    if method == "ping":
+        return {}
+    return {"isError": True, "content": [{"type": "text", "text": "Todo run is unavailable; start a fresh scoped run from Todo."}]}
+
+
+def codex_worker_proxy(ticket: Path) -> None:
+    """Native stdio MCP → existing stateless HTTP worker. No listener or shared-daemon secret."""
+    try:
+        data = consume_private_handoff(ticket)
+    except FileNotFoundError:
+        data = None  # Reopening an old native chat must not restore an expired credential.
+    if data and (data.get("kind") != "worker" or not data.get("token") or not data.get("url", "").endswith("/mcp/agent")):
+        raise RuntimeError("Invalid private worker handoff")
+    protocol = None
+    for line in sys.stdin:
+        message = json.loads(line)
+        if "id" not in message:
+            continue  # stateless endpoint needs no initialized notification acknowledgement
+        try:
+            if data:
+                request = urllib.request.Request(data["url"], data=json.dumps(message).encode(), method="POST",
+                          headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
+                                   "Authorization": "Bearer " + data["token"], **({"MCP-Protocol-Version": protocol} if protocol else {})})
+                try:
+                    with urllib.request.urlopen(request, timeout=60) as response:
+                        payload = json.load(response)
+                except urllib.error.HTTPError as exc:
+                    if exc.code not in (401, 403):
+                        raise
+                    data = None
+                    payload = {"jsonrpc": "2.0", "id": message["id"], "result": worker_proxy_offline(message)}
+                if message.get("method") == "initialize":
+                    protocol = payload.get("result", {}).get("protocolVersion")
+            else:
+                payload = {"jsonrpc": "2.0", "id": message["id"], "result": worker_proxy_offline(message)}
+        except Exception:
+            payload = {"jsonrpc": "2.0", "id": message["id"], "error": {"code": -32000, "message": "Todo worker transport unavailable"}}
+        text = json.dumps(payload)
+        if data:
+            text = text.replace(data["token"], "[redacted]")
+        print(text, flush=True)
+
+
 def run_agent(cfg: dict, run: dict) -> None:
-    global _task_runs
-    with _lock:
-        _task_runs += 1
+    if run["agent"].get("executor") == "codex-app":
+        run_codex_app(cfg, run)
+        return
+    if run["agent"].get("executor") == "codex-herdr":
+        run_herdr(cfg, run)
+        return
     mcp_config = STATE / f"mcp-{run['id']}.json"
     path = None
     try:
         repo = repo_for(cfg, run)
         path = workspace(run, repo)
         STATE.mkdir(parents=True, exist_ok=True)
-        mcp_config.write_text(json.dumps({"mcpServers": {"todo": {
+        write_private_json(mcp_config, {"mcpServers": {"todo": {
             "type": "http", "url": cfg["url"] + run["mcp_path"],
-            "headers": {"Authorization": f"Bearer {run['token']}"}}}}))
-        mcp_config.chmod(0o600)
+            "headers": {"Authorization": f"Bearer {run['token']}"}}}})
         report(cfg, run["id"], status="running", branch=run.get("branch") if run["kind"] == "task" and repo else None,
                output=f"[{'worktree' if repo else 'scratch folder'} {path}]\n")
         command = " ".join(shlex.quote(a) for a in claude_command(cfg, run, mcp_config))
@@ -592,14 +1464,16 @@ def run_agent(cfg: dict, run: dict) -> None:
                 subprocess.run(["git", "-C", repo_for(cfg, run), "worktree", "remove", "--force", path], capture_output=True)
             else:
                 shutil.rmtree(path, ignore_errors=True)
-        with _lock:
-            _task_runs -= 1
 
 
-def handle(cfg: dict, run: dict) -> None:
+def handle(cfg: dict, run: dict, reserved: bool = False) -> None:
     log(f"run {run['id']}: {run['label']} ({run.get('kind', 'tool')})")
+    global _task_runs
+    agent_run = run.get("kind") in ("task", "check")
+    if agent_run and not reserved:
+        with _lock:
+            _task_runs += 1
     try:
-        agent_run = run.get("kind") in ("task", "check")
         if agent_run:
             describe_agent(cfg, run)
         if fingerprint(run) not in approvals():
@@ -615,13 +1489,103 @@ def handle(cfg: dict, run: dict) -> None:
         else:
             (run_terminal if run["mode"] == "terminal" else run_headless)(cfg, run)
     except Exception as exc:  # noqa: BLE001
-        log(f"run {run['id']}: {exc}")
-        report(cfg, run["id"], status="failed", error=str(exc))
+        message = task_error(exc, run)
+        log(f"run {run['id']}: {message}")
+        report(cfg, run["id"], status="failed", error=message)
+    finally:
+        if agent_run:
+            with _lock:
+                _task_runs -= 1
+
+
+def reconcile_herdr(cfg: dict, run_id: int) -> None:
+    """Explicit operator recovery after closing the uncertain agent, never a launch retry."""
+    import fcntl
+    namespace = hashlib.sha256(cfg["url"].encode()).hexdigest()[:12]
+    folder = STATE / "herdr" / namespace
+    receipt = folder / f"run-{run_id}.json"
+    record = receipt_data(json.loads(receipt.read_text()))
+    with (folder / f"task-{record['run']['task_id']}.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        handoff_path(receipt).unlink(missing_ok=True)
+        save_receipt(receipt, record)
+        if record["status"] not in ("needs_inspection", "cancel_pending"):
+            raise RuntimeError("Only an uncertain receipt can be reconciled")
+        if record.get("route") == "codex-app":
+            client = CodexAppServer(cfg)
+            try:
+                app_connected(client, record)
+                if not record.get("thread_id") or not record.get("turn_id"):
+                    raise RuntimeError("Native launch lacks a complete identity; inspect manually, automatic reconciliation refused")
+                app_owned_thread(client, record)
+                if app_turn(client, record)["status"] == "inProgress":
+                    raise RuntimeError("Recorded native turn is still active; interrupt it yourself before reconciliation")
+            finally:
+                client.close()
+        elif not record.get("pane_id"):
+            raise RuntimeError("Launch returned no pane identity; inspect the selected workspace manually. Receipt cannot be cleared automatically")
+        if record.get("route") != "codex-app":
+            agents = herdr_call(cfg, record["session"], "agent", "list")["agents"]
+            if any(a.get("name") == record["agent_name"] or a.get("pane_id") == record["pane_id"] for a in agents):
+                raise RuntimeError("The recorded agent or pane still hosts an agent; close it yourself before reconciliation")
+        public = launch_public(record)
+        public.update(status="cancelled", error="Operator reconciled after verifying no live agent in the recorded pane")
+        api(cfg, f"/api/agent/runs/{run_id}", {"name": cfg["name"], "status": "failed", "launch": public,
+                                            "error": public["error"]})
+        record.update(status="cancelled", error=public["error"])
+        save_receipt(receipt, record)
+
+
+def recover_herdr(cfg: dict) -> None:
+    """Restart observation, never repeat start/prompt after a daemon restart."""
+    import fcntl
+    global _task_runs
+    namespace = hashlib.sha256(cfg["url"].encode()).hexdigest()[:12]
+    folder = STATE / "herdr" / namespace
+    for receipt in receipt_files(folder):
+        record = receipt_data(json.loads(receipt.read_text()))
+        task_lock = (folder / f"task-{record['run']['task_id']}.lock").open("a")
+        try:
+            fcntl.flock(task_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            task_lock.close()  # another daemon owns it; don't delete its handoff
+            continue
+        handoff_path(receipt).unlink(missing_ok=True)
+        save_receipt(receipt, record)  # scrub any legacy receipt token
+        if record["status"] in ("finished", "cancelled", "needs_inspection"):
+            task_lock.close()
+            continue
+        if record["status"] not in ("submitted", "working", "blocked", "unknown", "idle", "done"):
+            record.update(status="needs_inspection", error="Daemon stopped during launch; inspect before retrying")
+            save_receipt(receipt, record)
+            report(cfg, record["run"]["id"], status="failed", error=record["error"], launch=launch_public(record))
+            task_lock.close()
+            continue
+        with _lock:
+            _task_runs += 1
+
+        def observe(record=record, receipt=receipt, task_lock=task_lock):
+            global _task_runs
+            try:
+                if record.get("route") == "codex-app":
+                    monitor_codex_app(cfg, record, receipt)
+                else:
+                    monitor_herdr(cfg, record, receipt)
+            except Exception as exc:
+                record.update(status="needs_inspection", error=str(exc))
+                save_receipt(receipt, record)
+                report(cfg, record["run"]["id"], status="failed", error=str(exc), launch=launch_public(record))
+            finally:
+                task_lock.close()
+                with _lock:
+                    _task_runs -= 1
+        threading.Thread(target=observe, daemon=True).start()
 
 
 def loop() -> None:
     cfg = load_config()
     log(f"todo-agent {VERSION} as {cfg['name']!r} → {cfg['url']}")
+    recover_herdr(cfg)
     backoff = 2
     body = {"name": cfg["name"], "platform": "macos" if MAC else "linux", "version": VERSION}
     while True:
@@ -639,7 +1603,11 @@ def loop() -> None:
             backoff = min(backoff * 2, 60)
             continue
         if run:
-            threading.Thread(target=handle, args=(cfg, run), daemon=True).start()
+            reserved = run.get("kind") in ("task", "check")
+            if reserved:
+                with _lock:
+                    _task_runs += 1  # reserve before the next poll, including approval time
+            threading.Thread(target=handle, args=(cfg, run, reserved), daemon=True).start()
 
 
 # ----- install / status -----
@@ -755,6 +1723,22 @@ def main() -> None:
     elif cmd == "approvals":
         for fp, a in approvals().items():
             print(f"{a['approved_at']}  {a['label']}: {a['command']}  ({fp[:10]})")
+    elif cmd == "codex-herdr-bootstrap" and len(sys.argv) == 3:
+        try:
+            codex_herdr_bootstrap(Path(sys.argv[2]))
+        except Exception as exc:
+            # No exception values, config, token, argv or environment in terminal output.
+            print(f"Codex credential handoff failed ({type(exc).__name__}); inspect the private handoff lifecycle", file=sys.stderr)
+            sys.exit(1)
+    elif cmd == "codex-worker-proxy" and len(sys.argv) == 3:
+        try:
+            codex_worker_proxy(Path(sys.argv[2]))
+        except Exception:
+            print("Todo worker bridge unavailable", file=sys.stderr)
+            sys.exit(1)
+    elif cmd == "herdr-reconcile" and len(sys.argv) == 3 and sys.argv[2].isdigit():
+        reconcile_herdr(load_config(), int(sys.argv[2]))
+        print("Receipt reconciled; a new run may now be requested in Todo")
     elif cmd == "upload" and len(sys.argv) >= 4:
         upload_cli(sys.argv[2:])
     elif cmd == "forget":

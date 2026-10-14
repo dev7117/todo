@@ -191,6 +191,8 @@ export interface Agent {
 export type RunStatus = "queued" | "claimed" | "running" | "succeeded" | "failed" | "declined" | "expired" | "cancelled";
 
 export interface LauncherRun {
+  launch?: { route?: string; thread_id?: string; turn_id?: string; codex_project?: string; remote_server?: string; session?: string; workspace?: string; tab?: string; pane_id?: string; agent_name?: string; status?: string; error?: string };
+  executor?: "claude" | "codex-herdr" | "codex-app";
   id: number;
   /** tool = a hub tool; task = an agent working a task; check = an agent's setup smoke test */
   kind: "tool" | "task" | "check";
@@ -966,6 +968,7 @@ export function usePeopleMutations() {
 }
 
 export interface AgentProfile {
+  executor: "claude" | "codex-herdr" | "codex-app";
   id: number;
   name: string;
   title: string;
@@ -981,6 +984,7 @@ export interface AgentProfile {
 }
 
 export interface AgentCheck {
+  executor?: "claude" | "codex-herdr" | "codex-app";
   agent: string;
   ok: boolean;
   checks: { check: string; ok: boolean; detail: string; fix?: string }[];

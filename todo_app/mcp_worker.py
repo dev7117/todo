@@ -28,12 +28,13 @@ F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 tracer = trace.get_tracer("todo.mcp.agent")
 
 INSTRUCTIONS = """\
-You're working one task from the user's todo app, started headless on their machine. These
+You're working one task from the user's todo app, on their machine. These
 tools are your line to the user and only work for this task. Start with get_assignment; use the
 todo-worker skill for the loop. Finish with request_review (PR + summary) or ask (a question
 for the user), then stop. Done is the user's call: they approve it in the app.
 
-The user only sees what's on the task, never your working folder or this terminal. Put the
+get_assignment tells you whether this is headless work or a visible Codex/Herdr session.
+In headless work the user only sees the task. In Herdr they can join your terminal. Put the
 deliverable there: write-ups and drafts as notebook blocks (add_note), files with attach_file or
 saved in ./outputs/ (attached when the run ends). Never point them to a local path.
 """

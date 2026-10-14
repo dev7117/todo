@@ -201,7 +201,7 @@ function AgentSetupCard({ person }: { person: Person }) {
         <button
           type="button"
           className="btn btn-ghost btn-sm"
-          disabled={test.isPending}
+          disabled={test.isPending || check?.executor?.startsWith("codex-")}
           onClick={() => test.mutate(person.id, { onSuccess: (r) => setRunId(r.id), onError: (e) => toast(e.message, "error") })}
         >
           Run setup check
@@ -211,7 +211,7 @@ function AgentSetupCard({ person }: { person: Person }) {
       {run?.output && (
         <pre className="diff anim-fade mt-2 max-h-60 overflow-auto whitespace-pre-wrap rounded-[8px] border border-edge bg-fg/[0.03] p-2 text-xs">{run.output}</pre>
       )}
-      <p className="mt-3 text-xs text-muted">Assign it a task and it starts on its machine: in a worktree when the task’s project has a repo, else in a scratch folder.</p>
+      <p className="mt-3 text-xs text-muted">{check?.executor?.startsWith("codex-") ? "Codex handles tasks across customers and projects. A linked repo gets its own worktree; other tasks use a scratch folder. Configure the harness once on its machine." : "Assign it a task and it starts on its machine: in a worktree when the task’s project has a repo, else in a scratch folder."}</p>
     </section>
   );
 }
