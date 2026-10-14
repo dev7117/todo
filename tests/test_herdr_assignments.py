@@ -765,3 +765,33 @@ def test_native_connection_error_reports_real_state(integration):
             return {'status': 'errored', 'installationId': 'fixture-install'}
     with pytest.raises(RuntimeError, match='reports errored; pairing alone'):
         rt.app_connected(RelayError())
+
+
+@pytest.mark.parametrize('with_task', [False, True])
+def test_daemon_poll_loop_starts_and_reserves_capacity(integration, monkeypatch, with_task):
+    x = integration
+    rt = x['runtime']
+    cfg = {**x['cfg'], 'max_task_runs': 1}
+    monkeypatch.setattr(rt, 'load_config', lambda: cfg)
+    monkeypatch.setattr(rt, 'log', lambda _: None)
+    run = x['assignment']()[1] if with_task else None
+    bodies, started = [], []
+    def poll(cfg, path, body, **kwargs):
+        assert path == '/api/agent/poll'
+        bodies.append(dict(body))
+        if len(bodies) == 2: raise KeyboardInterrupt  # bounded actual daemon loop, no service/network
+        return {'run': run}
+    class Thread:
+        def __init__(self, **kwargs): self.arguments = kwargs
+        def start(self): started.append(self.arguments)
+    monkeypatch.setattr(rt, 'api', poll)
+    monkeypatch.setattr(rt.threading, 'Thread', Thread)
+    with pytest.raises(KeyboardInterrupt): rt.loop()
+    assert bodies[0]['version'] == '1.4' and bodies[0]['accept_tasks'] is True
+    assert bodies[1]['accept_tasks'] is (not with_task)
+    assert rt._task_runs == int(with_task)
+    if with_task:
+        assert started[0]['target'] == rt.handle
+        assert started[0]['args'] == (cfg, run, True)
+    else:
+        assert started == []
