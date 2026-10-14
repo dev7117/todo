@@ -342,3 +342,20 @@ def test_upload_files_to_a_task_from_the_app(client):
     assert f["name"] == "w2.pdf"
     assert client.delete(f"/api/files/{f['id']}").status_code == 204
     assert client.get(f"/api/tasks/{task['id']}").json()["files"] == []
+
+
+def test_codex_profile_and_launch_receipt_api(client):
+    project, agent, task = setup(client)
+    response = client.put(f"/api/people/{agent['id']}/agent", json={"executor": "codex-herdr"})
+    assert response.status_code == 200 and response.json()["executor"] == "codex-herdr"
+    assign(client, task, agent)
+    run = poll(client, version="1.4")
+    assert run["agent"]["executor"] == "codex-herdr"
+    receipt = {"session": "default", "workspace": "wA", "pane_id": "wA:p9", "terminal_id": "term-fixture", "status": "blocked"}
+    report(client, run["id"], status="running", launch=receipt)
+    saved = client.get(f"/api/tasks/{task['id']}/runs").json()[0]
+    assert saved["launch"] == receipt and "token" not in saved and "token_hash" not in saved
+    error, assignment = worker(client, run["token"], "get_assignment")
+    assert not error and "selected Codex harness" in assignment["deliver"]
+    check = client.get(f"/api/people/{agent['id']}/agent/check").json()
+    assert check["executor"] == "codex-herdr"

@@ -108,7 +108,7 @@ class Review:
                     (changeset_id, seq, change["action"], change["task_id"], json.dumps(change["payload"]),
                      json.dumps(change["before"]) if change["before"] else None, change["reason"], change.get("ref")),
                 )
-        if not self.store.settings()["review_claude_changes"]:
+        if created_by != "agent" and not self.store.settings()["review_claude_changes"]:
             return {**self.decide(changeset_id, approve="all"), "skipped": skipped}
         return {**self.get(changeset_id), "skipped": skipped}
 

@@ -359,6 +359,7 @@ class DispatchIn(BaseModel):
 
 
 class AgentIn(BaseModel):
+    executor: Literal["claude", "codex-herdr", "codex-app"] | None = None
     claude_agent: str | None = None
     machine: str | None = None
     model: str | None = None
@@ -418,6 +419,7 @@ class PollIn(BaseModel):
 
 
 class ReportIn(BaseModel):
+    launch: dict[str, Any] | None = None
     name: str
     status: Literal["running", "succeeded", "failed", "declined"] | None = None
     exit_code: int | None = None
@@ -454,9 +456,9 @@ def agent_report(run_id: int, body: ReportIn) -> dict[str, Any]:
     run = dispatch.report(
         run_id, body.name, status=body.status, exit_code=body.exit_code, output=body.output,
         append=body.append, error=body.error, session_id=body.session_id, branch=body.branch,
-        tokens=body.tokens, cached_tokens=body.cached_tokens,
+        tokens=body.tokens, cached_tokens=body.cached_tokens, launch=body.launch,
     )
-    return {"status": run["status"]}  # 'cancelled' tells the machine to stop
+    return {"status": run["status"], "outcome": run.get("outcome")}  # 'cancelled' tells the machine to stop
 
 
 # ----- client sync (todo_app/ledger.py): what a scheduled sync reads for this customer -----

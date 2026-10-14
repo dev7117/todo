@@ -65,6 +65,10 @@ export default function AgentPanel({ task }: { task: Task }) {
       {latest && (
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 pl-9 text-xs text-muted">
           <span>{latest.agent}</span>
+          {latest.launch?.session && <span>Herdr: {latest.launch.session} · {latest.launch.workspace} · {latest.launch.pane_id}</span>}
+          {latest.launch?.thread_id && <span>Codex Remote: {latest.launch.remote_server} · {latest.launch.thread_id}</span>}
+          {latest.launch?.status === "blocked" && <span className="text-warning">Needs your input in the selected harness</span>}
+          {["needs_inspection", "cancel_pending"].includes(latest.launch?.status ?? "") && <span className="text-warning">Inspect the recorded task before starting again</span>}
           {latest.branch && (
             <span className="inline-flex items-center gap-1">
               <GitBranch size={12} /> {latest.branch}

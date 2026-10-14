@@ -9,6 +9,8 @@ the background (headless), and reports status and output back here.
 """
 from __future__ import annotations
 
+import json
+
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -88,14 +90,16 @@ class Agents:
             )
         return self.get_run(cur.lastrowid)
 
-    def claim(self, agent: str, *, kinds: tuple[str, ...] = ("tool",)) -> dict[str, Any] | None:
+    def claim(self, agent: str, *, kinds: tuple[str, ...] = ("tool",), excluded_executors: tuple[str, ...] = ()) -> dict[str, Any] | None:
         """Hand the oldest queued run for this machine to its agent. ``kinds``: what the agent
         takes right now (agents before 1.2 only know tool runs; a busy one skips task runs)."""
         self._expire()
         with self.store.tx() as c:
             row = c.execute(
                 f"SELECT id FROM launcher_runs WHERE agent = ? AND status = 'queued'"
-                f" AND kind IN ({', '.join('?' * len(kinds))}) ORDER BY id LIMIT 1", (agent, *kinds),
+                f" AND kind IN ({', '.join('?' * len(kinds))})"
+                + (f" AND executor NOT IN ({', '.join('?' * len(excluded_executors))})" if excluded_executors else "")
+                + " ORDER BY id LIMIT 1", (agent, *kinds, *excluded_executors),
             ).fetchone()
             if not row:
                 return None
@@ -115,7 +119,12 @@ class Agents:
                        outputs=[o.strip() for o in (step["outputs"] if step else "").splitlines() if o.strip()])
         return out
 
-    def report(
+    def report(self, run_id: int, agent: str, **fields: Any) -> dict[str, Any]:
+        # Cancellation and reports serialize; a stale running report cannot revive a stopped run.
+        with self.store.tx():
+            return self._report(run_id, agent, **fields)
+
+    def _report(
         self,
         run_id: int,
         agent: str,
@@ -129,12 +138,19 @@ class Agents:
         branch: str | None = None,
         tokens: int | None = None,
         cached_tokens: int | None = None,
+        launch: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """A machine reporting on its run. Task runs also send Claude's session (for resume),
         the branch it works on, and the tokens it used (running totals for the run)."""
         run = self.get_run(run_id)
         if run["agent"] != agent:
             raise Invalid("That run belongs to another machine")
+        if launch is not None:
+            allowed = {"session", "workspace", "tab", "pane_id", "agent_name", "cwd", "project_root", "terminal_id", "route", "thread_id", "turn_id", "codex_project", "remote_server", "app_installation", "status", "error"}
+            if set(launch) - allowed:
+                raise Invalid("Unknown launch receipt fields")
+            with self.store.tx() as c:
+                c.execute("UPDATE launcher_runs SET launch = ? WHERE id = ?", (json.dumps(launch), run_id))
         if session_id or branch or tokens is not None or cached_tokens is not None:
             with self.store.tx() as c:
                 c.execute(
@@ -143,7 +159,7 @@ class Agents:
                     (session_id, branch, tokens, cached_tokens, run_id),
                 )
         if run["status"] in FINAL:
-            return run
+            return self.get_run(run_id)
         sets: dict[str, Any] = {}
         if status:
             if status not in AGENT_STATUSES:
@@ -169,6 +185,10 @@ class Agents:
         return self.get_run(run_id)
 
     def cancel(self, run_id: int) -> dict[str, Any]:
+        with self.store.tx():
+            return self._cancel(run_id)
+
+    def _cancel(self, run_id: int) -> dict[str, Any]:
         """Withdraw a run nobody has picked up yet, or stop an agent's task run: the machine
         sees 'cancelled' on its next report and stops Claude."""
         run = self.get_run(run_id)
@@ -191,6 +211,7 @@ class Agents:
             raise NotFound(f"No run with id {run_id}")
         out = dict(row)
         out.pop("token_hash", None)
+        out["launch"] = json.loads(out["launch"])
         return out
 
     def list_runs(
@@ -215,6 +236,7 @@ class Agents:
         rows = [dict(r) for r in self.store._rows(sql, [*params, limit])]
         for r in rows:
             r.pop("token_hash", None)
+            r["launch"] = json.loads(r["launch"])
         if not output:
             for r in rows:
                 r["output"] = r["output"][-2000:]
