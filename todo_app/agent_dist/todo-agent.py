@@ -1583,6 +1583,7 @@ def recover_herdr(cfg: dict) -> None:
 
 
 def loop() -> None:
+    global _task_runs
     cfg = load_config()
     log(f"todo-agent {VERSION} as {cfg['name']!r} → {cfg['url']}")
     recover_herdr(cfg)
