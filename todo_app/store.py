@@ -108,9 +108,30 @@ def _branch(value: str | None) -> str:
 
 
 class Store:
+    # Queue presentation only: keep every prep record and its history. Generated
+    # steps belong in the prep packet; the parent is the single actionable task.
+    # Read the meeting's current start so a calendar move takes effect immediately.
+    # Closed records remain visible in history, and ordinary meeting action items
+    # (which have no cadence occurrence) are unaffected.
+    _VISIBLE_TASK = """
+        (t.status IN ('done', 'cancelled') OR NOT EXISTS (
+            SELECT 1 FROM cadence_occurrences o
+            LEFT JOIN meetings m ON m.id = o.meeting_id
+            WHERE (o.prep_task_id = t.id OR
+                   (o.prep_task_id = t.parent_id
+                    AND t.external_id LIKE 'occ' || o.id || '-step%'))
+              AND (o.prep_task_id = t.parent_id
+                   OR o.status IN ('held', 'skipped')
+                   OR m.status IN ('held', 'cancelled')
+                   OR julianday(COALESCE(m.starts_at, o.starts_at)) <= julianday(todo_now()))
+        ))
+    """
+
     def __init__(self, conn: sqlite3.Connection, today: Callable[[], date] = date.today) -> None:
         self.conn = conn
         self.today = today
+        self.now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
+        self.conn.create_function("todo_now", 0, lambda: self.now().isoformat())
         self._lock = threading.RLock()
         # Called inside the write when a task's assignee changes: (task_id, assignee_id, source).
         # Dispatch listens, to start an agent when the new assignee is one.
@@ -193,7 +214,7 @@ class Store:
                    MAX(t.updated_at) AS last_task_activity
             FROM customers c
             LEFT JOIN projects p ON p.customer_id = c.id
-            LEFT JOIN tasks t ON t.project_id = p.id
+            LEFT JOIN tasks t ON t.project_id = p.id AND {self._VISIBLE_TASK}
             WHERE ? OR c.archived = 0
             GROUP BY c.id
             ORDER BY c.archived, lower(c.name)
@@ -297,7 +318,7 @@ class Store:
                    COUNT(t.id) FILTER (WHERE t.status IN {OPEN_STATUSES}) AS open_count,
                    COUNT(t.id) FILTER (WHERE t.status IN {OPEN_STATUSES} AND t.due_on < ?) AS overdue_count,
                    COUNT(t.id) FILTER (WHERE t.status IN {CLOSED_STATUSES}) AS closed_count
-            FROM projects p LEFT JOIN tasks t ON t.project_id = p.id
+            FROM projects p LEFT JOIN tasks t ON t.project_id = p.id AND {self._VISIBLE_TASK}
             LEFT JOIN customers c ON c.id = p.customer_id
             WHERE ? OR p.archived = 0
             GROUP BY p.id
@@ -406,8 +427,9 @@ class Store:
 
     # ----- tasks: reading -----
 
-    _TASK_SELECT = """
-        SELECT t.*, p.name AS project, p.customer_id AS customer_id, c.name AS customer,
+    _TASK_SELECT = f"""
+        SELECT t.*, {_VISIBLE_TASK} AS queue_visible,
+               p.name AS project, p.customer_id AS customer_id, c.name AS customer,
                a.name AS assignee, a.kind AS assignee_kind,
                (SELECT group_concat(pp.id || ':' || pp.name, '|') FROM task_people tp
                   JOIN people pp ON pp.id = tp.person_id WHERE tp.task_id = t.id) AS followers_raw,
@@ -426,6 +448,7 @@ class Store:
     def _task_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         today = self.today().isoformat()
         out = dict(row)
+        queue_visible = out.pop("queue_visible", True)
         raw = out.pop("followers_raw", None)
         out["followers"] = [
             {"id": int(pid), "name": name}
@@ -433,7 +456,7 @@ class Store:
         ]
         out["today"] = bool(out["today_on"] and out["today_on"] <= today)
         out["overdue"] = bool(
-            out["due_on"] and out["due_on"] < today and out["status"] in OPEN_STATUSES
+            queue_visible and out["due_on"] and out["due_on"] < today and out["status"] in OPEN_STATUSES
         )
         return out
 
@@ -494,7 +517,7 @@ class Store:
         top_level: bool = False,
         limit: int = 500,
     ) -> list[dict[str, Any]]:
-        where: list[str] = []
+        where: list[str] = [self._VISIBLE_TASK]
         params: list[Any] = []
         if top_level:  # boards: tasks in a group live inside their parent
             where.append("t.parent_id IS NULL")
@@ -590,7 +613,7 @@ class Store:
         open_rows = self._rows(
             self._TASK_SELECT
             + f"""
-            WHERE t.status IN {OPEN_STATUSES} AND t.assignee_id IS NULL
+            WHERE t.status IN {OPEN_STATUSES} AND t.assignee_id IS NULL AND {self._VISIBLE_TASK}
               AND ((t.today_on IS NOT NULL AND t.today_on <= ?) OR t.status = 'in_progress'){scope}
             ORDER BY t.sort_key, t.priority DESC, t.id
             """,
@@ -627,7 +650,7 @@ class Store:
               COUNT(*) FILTER (WHERE t.status IN {OPEN_STATUSES} AND t.due_on < ?) AS overdue,
               COUNT(*) FILTER (WHERE t.status IN {OPEN_STATUSES}) AS open
             FROM tasks t LEFT JOIN projects p ON p.id = t.project_id
-            WHERE 1 = 1{scope}
+            WHERE {self._VISIBLE_TASK}{scope}
             """,
             (today, today, *scope_params),
         )
@@ -675,13 +698,15 @@ class Store:
         params: list[Any] = [expr]
         if not include_closed:
             where.append(f"t.status IN {OPEN_STATUSES}")
+            where.append(self._VISIBLE_TASK)
         if area:
             where.append("t.area = ?")
             params.append(area)
         params.append(limit)
         rows = self._rows(
             f"""
-            SELECT t.*, p.name AS project, p.customer_id AS customer_id, c.name AS customer,
+            SELECT t.*, {self._VISIBLE_TASK} AS queue_visible,
+                   p.name AS project, p.customer_id AS customer_id, c.name AS customer,
                    a.name AS assignee, NULL AS followers_raw, NULL AS subtasks_total, NULL AS subtasks_done,
                    NULL AS parent, NULL AS children_total, NULL AS children_done, NULL AS occurrence_id,
                    bm25(tasks_fts, 10.0, 3.0, 1.0) AS rank
