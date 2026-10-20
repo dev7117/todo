@@ -512,7 +512,12 @@ export const useTasks = (filters: TaskFilters) => {
   // A project is in one area, so its own page shows its tasks whatever the focus (a personal
   // project's board isn't empty just because this device is in Work focus).
   const scoped = filters.project_id != null ? filters : { ...filters, area: area ?? filters.area };
-  return useQuery({ queryKey: ["tasks", scoped], queryFn: () => api<Task[]>(`/api/tasks${qs({ ...scoped })}`) });
+  return useQuery({
+    queryKey: ["tasks", scoped],
+    queryFn: () => api<Task[]>(`/api/tasks${qs({ ...scoped })}`),
+    // A meeting's prep expires at its start even when the page stays open.
+    refetchInterval: 30_000,
+  });
 };
 export const useSearch = (q: string, includeClosed: boolean) => {
   const { area } = useFocus();

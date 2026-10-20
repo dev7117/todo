@@ -30,11 +30,13 @@ class People:
         rows = self.store._rows(
             f"""
             SELECT pe.*, c.name AS customer,
-              (SELECT COUNT(*) FROM tasks t WHERE t.assignee_id = pe.id AND t.status IN {OPEN_STATUSES}) AS assigned_open,
               (SELECT COUNT(*) FROM tasks t WHERE t.assignee_id = pe.id AND t.status IN {OPEN_STATUSES}
-                 AND t.due_on < ?) AS overdue,
+                 AND {self.store._VISIBLE_TASK}) AS assigned_open,
+              (SELECT COUNT(*) FROM tasks t WHERE t.assignee_id = pe.id AND t.status IN {OPEN_STATUSES}
+                 AND {self.store._VISIBLE_TASK} AND t.due_on < ?) AS overdue,
               (SELECT COUNT(*) FROM task_people tp JOIN tasks t ON t.id = tp.task_id
-                 WHERE tp.person_id = pe.id AND t.status IN {OPEN_STATUSES}) AS following_open,
+                 WHERE tp.person_id = pe.id AND t.status IN {OPEN_STATUSES}
+                 AND {self.store._VISIBLE_TASK}) AS following_open,
               (SELECT MAX(t.updated_at) FROM tasks t WHERE t.assignee_id = pe.id
                  OR EXISTS (SELECT 1 FROM task_people tp WHERE tp.task_id = t.id AND tp.person_id = pe.id)) AS last_activity
             FROM people pe LEFT JOIN customers c ON c.id = pe.customer_id

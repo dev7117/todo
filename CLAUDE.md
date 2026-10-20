@@ -119,6 +119,13 @@ Everything shares one SQLite database. Tasks come from the app, the bar's quick-
     - talking points per agenda topic (`occurrence_topics`), notes, and files.
 
     Past occurrences become `held`. One whose calendar meeting was cancelled becomes `skipped`.
+  - Active task queues show only the prep parent. Generated step tasks stay available inside
+    the parent and prep packet. Unfinished prep disappears from active lists and counts at
+    the linked meeting's current start time (or the occurrence start without a meeting),
+    and for held/skipped occurrences or held/cancelled meetings. This is a read-time filter,
+    not deletion or completion: task detail, prep packets, full search, and completed history
+    retain the records. The open web task lists refresh every 30 seconds. Ordinary meeting
+    follow-up tasks and manually grouped tasks keep their existing behavior.
   - Tasks and meetings carry `occurrence_id`, so prep tasks and the meeting dialog link to the prep page.
   - **Files** (`attachments`): stored in `<data>/files/<sha256>`, 50 MB max. `GET /api/files/{id}/{name}` serves images, PDF, txt, csv and md inline; everything else downloads as octet-stream with nosniff. Uploads come from:
     - the page (drop or Attach);
@@ -130,7 +137,8 @@ Everything shares one SQLite database. Tasks come from the app, the bar's quick-
   - On a board, hold a card over the middle of another for ~450ms. A translucent folder plate grows behind the target while it sinks into it (`.folder-card[data-merge]`). Drop it and both go into a new parent task that takes the target's place and status. The parent's name is suggested (`group_title`: words the titles share, else their project) and selected for typing over.
   - Dropping onto a group, or onto a task already in one, adds to that group (`.folder-absorb` pulse). Groups can't go inside groups. A quick drop near a card's top or bottom edge still reorders.
   - Boards ask `top_level=true`, so children live only inside their group. The group card previews up to four children plus children done/total.
-  - Today and lists still show children, with a folder tag naming their group.
+  - Today and lists still show ordinary children, with a folder tag naming their group.
+    Generated cadence prep steps stay inside their prep parent.
   - The task page of a group lists its tasks (check off, open, take out). A child shows "In <group> · Take out".
   - Taking the last task out of a group made by grouping deletes it, unless someone wrote notes or blocks in it. Deleting a group frees its tasks.
   - History events `grouped`. Undo is in the toast.
