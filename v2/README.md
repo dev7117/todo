@@ -145,6 +145,7 @@ Markdown description, status and target date. Titles are trimmed and must be
 non-empty. Dates must be `YYYY-MM-DD` or null. There is no delete endpoint.
 Missing projects return 404; invalid fields return 422. Identical edits leave
 `updated_at` alone. New timestamps use `todo_v2.db.now()`.
+Creating a project with `status: "done"` returns 422; complete it after creation.
 
 The UI's **Mark done** button and status editor use `PATCH /api/projects/{id}`
 with `status: "done"`. This is a UI-facing REST surface, not a caller identity
@@ -154,19 +155,24 @@ surface is pinned by a test so a later agent/MCP addition must revisit that rule
 Assign or unassign using `PATCH /api/tasks/{id}` with `project_id` or null.
 Unknown project IDs return 422. Changes record old/new IDs in task history in
 the same transaction; identical assignments change neither history nor timestamps.
-Assignment is independent of nesting: moving a parent does not move its children,
-and newly created subtasks start unassigned. Completing a parent leaves children
-alone. Cancelled tasks have no completion timestamp and an unchecked, disabled
+New subtasks inherit their parent’s `project_id` inside the creation transaction;
+the initial history snapshot includes that assignment. Create requests do not
+accept explicit `project_id`; use PATCH to override or clear it afterward.
+Moving a parent later does not move its existing children. Completing a parent
+leaves children alone. Cancelled tasks have no completion timestamp and an unchecked, disabled
 checkbox; change their status using the status picker to resume them.
 
 The shared `projects.progress` helper implements PRD §4.4 for one project: count
-only its non-cancelled tasks that have no children, then divide done by total.
-Any child makes a task a parent, even if that child belongs to another project;
-children count only in their own project. Zero counted tasks yields 0 of 0, 0%.
+only its non-cancelled tasks without non-cancelled children in the same project,
+then divide done by total. A parent with only cancelled children counts as a leaf
+and contributes to done only when the parent is done. Children on other projects
+do not replace the parent. Zero counted tasks yields zero progress in the API
+and “Nothing linked yet” in the UI.
 Project status never changes automatically from task progress.
 
 `/projects` and `/projects/{id}` reuse the header’s History API navigation and
-small pathname switch; the existing SPA fallback supports direct links.
+small pathname switch; project creation uses the same navigation helper.
+The existing SPA fallback supports direct links.
 The task page and project page reuse the task rows and their project picker.
 Descriptions are stored as Markdown and displayed as plain text in this slice;
 Markdown blocks and rendering remain later work. No dependencies were added.

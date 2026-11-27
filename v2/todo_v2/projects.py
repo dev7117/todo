@@ -18,7 +18,7 @@ class CreateProject(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: Title
     description: str = ""
-    status: Status = "active"
+    status: Literal["active", "paused", "archived"] = "active"
     target_on: date | None = None
 
     @field_validator("target_on", mode="before")
@@ -66,15 +66,16 @@ class ProjectDetail(Project):
 
 
 def progress(conn, project_id: int) -> dict:
-    """Count this project's non-cancelled leaves, even across project boundaries.
+    """Count non-cancelled tasks without non-cancelled children in this project.
 
-    Any child makes a task a parent. A child counts only in its own project;
-    assignment is independent of nesting and is never inherited implicitly.
+    Cancelled and out-of-project children do not replace their parent in this
+    rollup. A parent with only cancelled children therefore counts as a leaf.
     """
     row = conn.execute(
         "SELECT count(*) AS total, coalesce(sum(status = 'done'), 0) AS done "
         "FROM tasks t WHERE project_id = ? AND status != 'cancelled' "
-        "AND NOT EXISTS (SELECT 1 FROM tasks child WHERE child.parent_id = t.id)",
+        "AND NOT EXISTS (SELECT 1 FROM tasks child WHERE child.parent_id = t.id "
+        "AND child.project_id = t.project_id AND child.status != 'cancelled')",
         (project_id,),
     ).fetchone()
     return {"done": row["done"], "total": row["total"],

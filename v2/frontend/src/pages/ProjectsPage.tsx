@@ -2,7 +2,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import ProjectProgress from "../components/ProjectProgress";
 import { type Project, projectRequest, projectStatuses } from "../lib/projects";
 
-export default function ProjectsPage() {
+export default function ProjectsPage({ onNavigate }: { onNavigate: (path: string) => void }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -21,7 +21,7 @@ export default function ProjectsPage() {
     setBusy(true); setError("");
     try {
       const project = await projectRequest<Project>("", "POST", { title });
-      window.location.assign(`/projects/${project.id}`);
+      onNavigate(`/projects/${project.id}`);
     } catch (error) { setError((error as Error).message); setBusy(false); }
   }
   return <div className="anim-fade">

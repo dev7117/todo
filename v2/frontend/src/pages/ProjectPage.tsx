@@ -82,7 +82,7 @@ export default function ProjectPage({ id }: { id: number }) {
       </form> : project.description && <p className="mb-6 whitespace-pre-wrap text-muted [overflow-wrap:anywhere]">{project.description}</p>}
       <div className="well mb-8 p-5">
         <ProjectProgress progress={project.progress} title={project.title} />
-        <p className="mt-3 text-xs text-muted">Counts tasks without subtasks. Cancelled tasks are excluded.</p>
+        <p className="mt-3 text-xs text-muted">Counts tasks without non-cancelled subtasks in this project.</p>
       </div>
       <div className="mb-3 flex items-center justify-between gap-3">
         <h2 className="section-title">Tasks</h2><a href="/" className="btn btn-quiet btn-sm">Manage tasks</a>

@@ -100,11 +100,13 @@ def router(db_path: Path) -> APIRouter:
     def create_task(body: CreateTask):
         with closing(connect(db_path)) as conn, conn:
             conn.execute("BEGIN IMMEDIATE")
-            validate_parent(conn, body.parent_id)
+            # Read and inherit inside the creation transaction, so the snapshot
+            # and initial history agree even if the parent is reassigned concurrently.
+            project_id = get(conn, body.parent_id)["project_id"] if body.parent_id is not None else None
             stamp = now()
             cursor = conn.execute(
-                "INSERT INTO tasks (title, notes, parent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (body.title, body.notes, body.parent_id, stamp, stamp),
+                "INSERT INTO tasks (title, notes, parent_id, project_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (body.title, body.notes, body.parent_id, project_id, stamp, stamp),
             )
             task = get(conn, cursor.lastrowid)
             record(conn, task["id"], stamp, "create", None, json.dumps(task))

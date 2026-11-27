@@ -55,6 +55,9 @@ export default function App() {
   function navigate(event: React.MouseEvent<HTMLAnchorElement>, to: string) {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
+    navigateTo(to);
+  }
+  function navigateTo(to: string) {
     window.history.pushState(null, "", to);
     setPath(to);
     window.scrollTo(0, 0);
@@ -85,7 +88,7 @@ export default function App() {
         </div>
       </header>
       <main className="mx-auto w-full max-w-[1280px] px-4 pb-24 pt-8 sm:px-8 sm:pt-10">
-        {path === "/agents" ? <AgentsPage work={work} /> : project ? <ProjectPage key={project[1]} id={Number(project[1])} /> : /^\/projects\/?$/.test(path) ? <ProjectsPage /> : <HomePage />}
+        {path === "/agents" ? <AgentsPage work={work} /> : project ? <ProjectPage key={project[1]} id={Number(project[1])} /> : /^\/projects\/?$/.test(path) ? <ProjectsPage onNavigate={navigateTo} /> : <HomePage />}
         <BuildInfo />
       </main>
     </div>

@@ -89,7 +89,8 @@ def test_missing_project_and_title(client):
 
 
 def test_project_order(client):
-    rows = [project(client, status=status) for status in ("done", "paused", "archived", "active")]
+    rows = [project(client, status=status) for status in ("active", "paused", "archived", "active")]
+    assert client.patch(f'/api/projects/{rows[0]["id"]}', json={"status": "done"}).status_code == 200
     assert [p["id"] for p in client.get("/api/projects").json()] == [rows[i]["id"] for i in (1, 3, 0, 2)]
 
 
@@ -128,14 +129,14 @@ def test_progress_counts_only_project_leaves(client, cfg):
     task(client, project_id=first["id"], status="cancelled")
     task(client, project_id=other["id"], status="done")
     task(client, status="done")
-    # A child in another project still makes this project's task a parent.
+    # A child in another project does not replace this project's parent.
     cross = task(client, project_id=first["id"], status="done")
     task(client, parent_id=cross["id"], project_id=other["id"])
     with closing(connect(cfg.db_path)) as conn:
-        assert progress(conn, first["id"]) == {"done": 2, "total": 4, "percent": 50}
+        assert progress(conn, first["id"]) == {"done": 3, "total": 5, "percent": 60}
         assert progress(conn, empty["id"]) == {"done": 0, "total": 0, "percent": 0}
     detail = client.get(f'/api/projects/{first["id"]}').json()
-    assert detail["progress"] == {"done": 2, "total": 4, "percent": 50}
+    assert detail["progress"] == {"done": 3, "total": 5, "percent": 60}
     assert all(t["project_id"] == first["id"] for t in detail["tasks"])
     task(client, project_id=empty["id"], status="cancelled")
     assert client.get(f'/api/projects/{empty["id"]}').json()["progress"] == {"done": 0, "total": 0, "percent": 0}
@@ -198,3 +199,52 @@ def test_project_and_assignment_survive_restart(cfg):
         assert client.get(f'/api/projects/{p["id"]}').json() == before
         assert client.get("/api/tasks").json() == [t]
         assert client.get(f'/api/tasks/{t["id"]}/history').json() == history
+
+
+def test_subtask_inherits_project_at_creation_and_counts_in_progress(client):
+    import json
+
+    p = project(client)
+    parent = task(client, project_id=p["id"], status="done")
+    response = client.post("/api/tasks", json={"title": "Paint cabinet doors", "parent_id": parent["id"]})
+    assert response.status_code == 201
+    child = response.json()
+    assert child["project_id"] == p["id"]
+    history = client.get(f'/api/tasks/{child["id"]}/history').json()
+    assert len(history) == 1 and history[0]["field"] == "create"
+    assert json.loads(history[0]["new_value"]) == child
+    detail = client.get(f'/api/projects/{p["id"]}').json()
+    assert child in detail["tasks"]
+    assert detail["progress"] == {"done": 0, "total": 1, "percent": 0}
+    client.post(f'/api/tasks/{child["id"]}/complete')
+    assert client.get(f'/api/projects/{p["id"]}').json()["progress"] == {"done": 1, "total": 1, "percent": 100}
+    # Inheritance is at creation only; later parent reassignment does not cascade.
+    client.patch(f'/api/tasks/{parent["id"]}', json={"project_id": None})
+    assert client.get(f'/api/projects/{p["id"]}').json()["tasks"][0]["id"] == child["id"]
+    unassigned = client.post("/api/tasks", json={"title": "Compare wood finishes", "parent_id": parent["id"]}).json()
+    assert unassigned["project_id"] is None
+    # Keep the create contract small: explicit assignment remains PATCH-only.
+    assert client.post("/api/tasks", json={"title": "Choose a finish", "parent_id": parent["id"],
+                                          "project_id": p["id"]}).status_code == 422
+
+
+def test_parent_with_only_cancelled_children_counts_as_leaf(client, cfg):
+    p = project(client)
+    parent = task(client, project_id=p["id"])
+    for title in ("Replace cabinet hinges", "Replace cabinet doors"):
+        task(client, title, project_id=p["id"], parent_id=parent["id"], status="cancelled")
+    with closing(connect(cfg.db_path)) as conn:
+        assert progress(conn, p["id"]) == {"done": 0, "total": 1, "percent": 0}
+    client.post(f'/api/tasks/{parent["id"]}/complete')
+    with closing(connect(cfg.db_path)) as conn:
+        assert progress(conn, p["id"]) == {"done": 1, "total": 1, "percent": 100}
+    client.patch(f'/api/tasks/{parent["id"]}', json={"status": "cancelled"})
+    with closing(connect(cfg.db_path)) as conn:
+        assert progress(conn, p["id"]) == {"done": 0, "total": 0, "percent": 0}
+
+
+def test_project_cannot_be_created_done_but_can_be_completed_later(client):
+    assert client.post("/api/projects", json={"title": "Kitchen refresh", "status": "done"}).status_code == 422
+    assert client.get("/api/projects").json() == []
+    row = project(client)
+    assert client.patch(f'/api/projects/{row["id"]}', json={"status": "done"}).json()["status"] == "done"
