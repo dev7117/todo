@@ -264,8 +264,8 @@ def test_unconfigured_and_existing_routes(tmp_path, token, repos):
     with TestClient(create_app(cfg, agent_work=reader)) as client:
         assert client.post("/api/agent-work/refresh").json()["configured"] is False
         assert client.get("/health").json()["github"] == {"configured": False, "last_poll_at": None, "last_error": None}
-        assert client.get("/api/items").status_code == 200
-        assert client.post("/api/items", json={"title": "Plan the garden"}).status_code == 201
+        assert client.get("/api/tasks").status_code == 200
+        assert client.post("/api/tasks", json={"title": "Plan the garden"}).status_code == 201
         assert client.get("/api/from-v1").json() == {"enabled": False, "items": []}
     assert fake.calls == []
 
@@ -276,17 +276,17 @@ def test_token_absent_from_all_json_and_database(tmp_path, monkeypatch, caplog):
     reader.refresh()
     monkeypatch.setattr(reader, "start", lambda: None)
     with TestClient(create_app(cfg, agent_work=reader)) as client:
-        for path in ("/api/agent-work", "/health", "/api/items", "/api/from-v1", "/openapi.json", "/api/nope"):
+        for path in ("/api/agent-work", "/health", "/api/tasks", "/api/from-v1", "/openapi.json", "/api/nope"):
             assert TOKEN not in client.get(path).text
         assert TOKEN not in client.post("/api/agent-work/refresh").text
         assert client.get("/health").json()["github"]["configured"] is True
-        assert client.get("/health").json()["schema_version"] == 2
+        assert client.get("/health").json()["schema_version"] == 3
     assert TOKEN not in repr(cfg)
     assert TOKEN not in caplog.text
     assert TOKEN.encode() not in cfg.db_path.read_bytes()
     with sqlite3.connect(cfg.db_path) as conn:
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert tables == {"schema_migrations", "items"}
+    assert tables == {"schema_migrations", "tasks", "task_history"}
 
 
 @pytest.mark.parametrize("value,expected", [("0", 5), ("4", 5), ("5", 5), ("9", 9), ("16", 15), ("oops", 5)])
@@ -317,6 +317,13 @@ def test_pagination_revalidates_every_page(tmp_path):
     reader.cache = touched
     assert reader._pages("/repos/example/repo-a/issues", {}) == [{"number": 1}, {"number": 2}]
     assert calls == [200, 200, 304, 304]
+
+
+def test_get_refresh_is_404(tmp_path, monkeypatch):
+    cfg, fake, now, reader = setup_reader(tmp_path)
+    monkeypatch.setattr(reader, "start", lambda: None)
+    with TestClient(create_app(cfg, agent_work=reader)) as client:
+        assert client.get("/api/agent-work/refresh").status_code == 404
 
 
 def test_http_refresh_floor_and_safe_health_error(tmp_path, monkeypatch):
