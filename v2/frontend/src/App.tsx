@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import AgentsPage, { useAgentWork } from "./pages/AgentsPage";
 import HomePage from "./pages/HomePage";
 import { AccentMenu, ThemeSwitch } from "./components/ThemeControls";
 
@@ -41,15 +42,37 @@ function BuildInfo() {
 }
 
 export default function App() {
+  const [path, setPath] = useState(window.location.pathname);
+  const work = useAgentWork();
+  useEffect(() => {
+    const onPop = () => setPath(window.location.pathname);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  function navigate(event: React.MouseEvent<HTMLAnchorElement>, to: string) {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    window.history.pushState(null, "", to);
+    setPath(to);
+    window.scrollTo(0, 0);
+  }
   return (
     <div className="frame">
       <header className="sticky top-0 z-40 border-b border-edge bg-panel/80 backdrop-blur-xl backdrop-saturate-150">
-        <div className="mx-auto flex h-14 max-w-[1280px] items-center gap-6 px-4 sm:px-8">
-          <a href="/" className="inline-flex shrink-0 items-center gap-2.5 text-[0.9375rem] font-semibold tracking-[-0.015em]">
+        <div className="mx-auto flex min-h-14 flex-wrap py-2 max-w-[1280px] items-center gap-2 px-4 sm:gap-6 sm:px-8">
+          <a href="/" onClick={(event) => navigate(event, "/")} className="inline-flex shrink-0 items-center gap-2.5 text-[0.9375rem] font-semibold tracking-[-0.015em]">
             <Mark />
             <span>Todo</span>
             <span className="tag">v2</span>
           </a>
+          <nav aria-label="Main navigation" className="flex items-center gap-1">
+            <a href="/" onClick={(event) => navigate(event, "/")} aria-current={path === "/" ? "page" : undefined}
+              className={`btn btn-sm ${path === "/" ? "btn-ghost" : "btn-quiet"}`}>Home</a>
+            <a href="/agents" onClick={(event) => navigate(event, "/agents")} aria-current={path === "/agents" ? "page" : undefined}
+              className={`btn btn-sm ${path === "/agents" ? "btn-ghost" : "btn-quiet"}`}>Agents
+              {!!work.data?.waiting_on_dev.length && <span className="tag tabular" aria-label={`${work.data.waiting_on_dev.length} waiting on you`}>{work.data.waiting_on_dev.length}</span>}
+            </a>
+          </nav>
           <div className="ml-auto flex items-center gap-1">
             <AccentMenu />
             <ThemeSwitch />
@@ -57,7 +80,7 @@ export default function App() {
         </div>
       </header>
       <main className="mx-auto w-full max-w-[1280px] px-4 pb-24 pt-8 sm:px-8 sm:pt-10">
-        <HomePage />
+        {path === "/agents" ? <AgentsPage work={work} /> : <HomePage />}
         <BuildInfo />
       </main>
     </div>

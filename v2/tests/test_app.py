@@ -37,6 +37,7 @@ def test_health_reports_version_and_schema(cfg: config.Config) -> None:
         "version": __version__,
         "commit": "abc123",
         "schema_version": migrate.discover()[-1].version,
+        "github": {"configured": False, "last_poll_at": None, "last_error": None},
     }
 
 

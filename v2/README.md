@@ -89,3 +89,43 @@ subtask creation and history. Done/cancelled tasks start collapsed. A child whos
 parent belongs to the other section stays visible in its own status section,
 with the parent named on its row. Changing a parent's status does not change its
 children. Projects, Ideas, Today, markdown blocks and search belong to later PRs.
+
+## Read-only GitHub agent work
+
+The Agents page (`/agents`) reads issues and pull requests directly from GitHub.
+It shows open work grouped by repository, linked PRs beneath their issue, a pinned
+waiting-on-you list, and a collapsed list of work closed or merged in the last
+seven days. No GitHub data is stored in SQLite and no GitHub writes are made.
+
+Server environment settings:
+
+- `TODO_V2_GITHUB_TOKEN`: supply a fine-grained, read-only token through the server
+  environment. Give it Metadata, Issues, Pull requests and Actions read access to
+  the selected repositories. Never put its value in source, images or client config.
+- `TODO_V2_GITHUB_REPOS=owner/name`: comma-separated repository allowlist. Invalid
+  entries are ignored and duplicates removed. Both a token and a non-empty valid
+  allowlist are required; otherwise Agents says “GitHub not configured”.
+- `TODO_V2_GITHUB_POLL_MINUTES=5`: background polling interval, clamped to 5–15
+  minutes (invalid integers use 5). Refresh has a shared 60-second floor, including
+  failed attempts. Rate-limit responses, remaining quota of 200 or fewer requests, and transport errors
+  extend the cooldown; cached work remains visible with a safe error message.
+
+`GET /api/agent-work` serves the in-memory snapshot; `POST /api/agent-work/refresh` requests a
+refresh subject to the floor and cooldown. `next_refresh_at` tells the UI when it
+can try again. `last_poll_at` is the last attempt; `last_updated_at` is the last
+complete successful snapshot. `/health` adds `github` with only `configured`,
+`last_poll_at`, and `last_error`. Neither endpoint includes the credential.
+
+Requests use ETags for every page, open PR detail, review list and Actions run list.
+Closed PRs use the issue list's merge timestamp without a separate PR detail request.
+CI uses the latest run per workflow for the current head, ignoring `claude.yml`.
+A comment review does not revoke an approval; a dismissed approval or outstanding
+change request does. A PR needs successful (or neutral/skipped) Actions runs,
+approval, a non-draft state and a clean mergeable result to wait on you implicitly;
+`needs-dev` explicitly flags either an issue or PR. Absent CI does not imply green.
+
+Runtime GitHub requests always use `https://api.github.com`; the API base is not
+an environment setting. Code-level tests can construct `Config` directly.
+The tests inject a fake GET transport and prohibit network connections. Run the
+normal v2 pytest and frontend TypeScript commands above; no extra dependencies
+are needed. Home, tasks and From v1 work independently of GitHub configuration.
