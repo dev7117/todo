@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)" />
+    <title>Todo</title>
+    <script>
+      // Apply theme + accent before first paint to avoid a flash of the wrong theme.
+      // It has to be inline (it runs before the bundle), so it mirrors applyAccent in
+      // src/theme.tsx: keep the storage keys and the ink threshold (160) in sync.
+      (function () {
+        try {
+          var mode = localStorage.getItem("todo-theme-mode") || "system";
+          var dark =
+            mode === "dark" ||
+            (mode !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", dark);
+          var accent = localStorage.getItem("todo-accent");
+          var match = accent && accent.match(/^#?([0-9a-f]{6})$/i);
+          if (match) {
+            var v = parseInt(match[1], 16);
+            var r = (v >> 16) & 255, g = (v >> 8) & 255, b = v & 255;
+            var root = document.documentElement;
+            root.style.setProperty("--c-accent", r + " " + g + " " + b);
+            root.style.setProperty(
+              "--c-accent-ink",
+              0.299 * r + 0.587 * g + 0.114 * b > 160 ? "23 23 23" : "255 255 255"
+            );
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
