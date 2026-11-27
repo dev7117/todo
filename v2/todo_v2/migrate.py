@@ -7,7 +7,9 @@ change the schema by adding the next number.
 
 Before the first pending migration applies, the live database is copied with SQLite's online
 backup API (not a file copy) to a timestamped file beside it. One run makes at most one
-backup, however many migrations are pending, and none when nothing is pending.
+backup, however many migrations are pending, and none when nothing is pending. If the
+database file did not exist at the start of the run (a first boot), no backup is taken:
+there is nothing to preserve.
 """
 from __future__ import annotations
 
@@ -79,6 +81,7 @@ def backup(conn: sqlite3.Connection, db_path: Path, current: int) -> Path:
 def migrate(db_path: Path, directory: Path | None = None) -> MigrationResult:
     """Apply every pending migration to the database at `db_path` (created if missing)."""
     migrations = discover(directory)
+    existed = db_path.exists()
     conn = sqlite3.connect(db_path, isolation_level=None)  # transactions are explicit below
     try:
         done = applied_versions(conn)
@@ -89,7 +92,8 @@ def migrate(db_path: Path, directory: Path | None = None) -> MigrationResult:
         if not pending:
             return MigrationResult([], max(done, default=0), None)
 
-        copy = backup(conn, db_path, max(done, default=0))
+        # First boot has no prior data to preserve; skip the empty-file backup.
+        copy = backup(conn, db_path, max(done, default=0)) if existed else None
         for migration in pending:
             _apply(conn, migration)
         return MigrationResult([m.version for m in pending], schema_version(conn), copy)

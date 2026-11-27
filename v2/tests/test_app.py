@@ -47,14 +47,14 @@ def test_restart_with_a_pending_migration_makes_exactly_one_backup(
     shutil.copytree(migrate.MIGRATIONS_DIR, directory)
     monkeypatch.setattr(migrate, "MIGRATIONS_DIR", directory)
 
-    assert boot(cfg)["schema_version"] == 1
-    first = backups(cfg)
+    assert boot(cfg)["schema_version"] == 1  # first boot: file did not exist
+    assert backups(cfg) == []
     assert boot(cfg)["schema_version"] == 1  # restart, nothing pending
-    assert backups(cfg) == first
+    assert backups(cfg) == []
 
     (directory / "0002_widgets.sql").write_text("CREATE TABLE widgets (id INTEGER PRIMARY KEY);")
     assert boot(cfg)["schema_version"] == 2  # restart with one pending
-    assert len(backups(cfg)) == len(first) + 1
+    assert len(backups(cfg)) == 1
 
 
 def test_spa_serves_index_assets_and_404s_unknown_api(cfg: config.Config) -> None:

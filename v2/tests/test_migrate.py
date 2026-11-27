@@ -57,7 +57,10 @@ def test_fresh_db_migrates(db: Path) -> None:
     shipped = [m.version for m in migrate.discover()]
     assert result.applied == shipped
     assert result.schema_version == shipped[-1]
-    assert {"schema_migrations", "settings"} <= tables(db)
+    assert "schema_migrations" in tables(db)
+    assert "settings" not in tables(db)
+    assert result.backup is None
+    assert backups(db) == []
     conn = sqlite3.connect(db)
     try:
         recorded = [r[0] for r in conn.execute("SELECT version FROM schema_migrations ORDER BY version")]
@@ -91,24 +94,28 @@ def test_no_backup_when_nothing_is_pending(db: Path, migrations: Path) -> None:
 
 
 def test_backup_is_taken_before_the_pending_migration_applies(db: Path, migrations: Path) -> None:
+    # Write the kept row into a table this test's own migration creates.
+    add_migration(
+        migrations,
+        "0002_widgets.sql",
+        "CREATE TABLE widgets (id INTEGER PRIMARY KEY, name TEXT NOT NULL);",
+    )
     migrate.migrate(db, migrations)
     with sqlite3.connect(db) as conn:
-        conn.execute("INSERT INTO settings (key, value) VALUES ('kept', 'yes')")
-    conn.close()
+        conn.execute("INSERT INTO widgets (name) VALUES ('kept')")
     already = set(backups(db))
-    add_migration(migrations, "0002_widgets.sql", "CREATE TABLE widgets (id INTEGER PRIMARY KEY);")
+    add_migration(migrations, "0003_gadgets.sql", "CREATE TABLE gadgets (id INTEGER PRIMARY KEY);")
 
     result = migrate.migrate(db, migrations)
 
     new = [b for b in backups(db) if b not in already]
     assert len(new) == 1 and result.backup == new[0]
     # The live DB has the change; the backup is the state just before it.
-    assert "widgets" in tables(db) and version_of(db) == 2
-    assert "widgets" not in tables(new[0]) and version_of(new[0]) == 1
+    assert "gadgets" in tables(db) and version_of(db) == 3
+    assert "gadgets" not in tables(new[0]) and version_of(new[0]) == 2
     with sqlite3.connect(new[0]) as copy:
-        assert copy.execute("SELECT value FROM settings WHERE key = 'kept'").fetchone() == ("yes",)
+        assert copy.execute("SELECT name FROM widgets").fetchone() == ("kept",)
         assert copy.execute("PRAGMA integrity_check").fetchone() == ("ok",)
-    copy.close()
 
 
 def test_several_pending_migrations_make_exactly_one_backup(db: Path, migrations: Path) -> None:
@@ -127,14 +134,27 @@ def test_several_pending_migrations_make_exactly_one_backup(db: Path, migrations
     assert not {"widgets", "gadgets"} & tables(new[0])
 
 
-def test_fresh_db_with_several_pending_makes_exactly_one_backup(db: Path, migrations: Path) -> None:
+def test_first_boot_makes_no_backup(db: Path) -> None:
+    assert not db.exists()
+
+    result = migrate.migrate(db)
+
+    assert result.applied == [m.version for m in migrate.discover()]
+    assert result.backup is None
+    assert db.exists()
+    assert backups(db) == []
+
+
+def test_fresh_db_with_several_pending_makes_no_backup(db: Path, migrations: Path) -> None:
     add_migration(migrations, "0002_widgets.sql", "CREATE TABLE widgets (id INTEGER PRIMARY KEY);")
+    assert not db.exists()
 
     result = migrate.migrate(db, migrations)
 
     assert result.applied == [1, 2]
-    assert backups(db) == [result.backup]
-    assert version_of(result.backup) == 0
+    assert result.backup is None
+    assert backups(db) == []
+    assert "widgets" in tables(db)
 
 
 def test_a_failing_migration_rolls_back_and_leaves_earlier_ones(db: Path, migrations: Path) -> None:
