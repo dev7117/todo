@@ -119,15 +119,9 @@
       "closed_at": "2026-11-26T11:00:00Z",
       "body": "",
       "labels": [],
-      "draft": false,
-      "head": {
-        "sha": "head-21"
-      },
-      "mergeable": true,
-      "mergeable_state": "clean",
-      "merged_at": "2026-11-26T11:00:00Z",
       "pull_request": {
-        "url": "unused"
+        "url": "unused",
+        "merged_at": "2026-11-26T11:00:00Z"
       }
     },
     {
@@ -276,25 +270,6 @@
         "path": ".github/workflows/claude.yml"
       }
     ]
-  },
-  "/repos/example/repo-a/pulls/21": {
-    "number": 21,
-    "title": "Add clearer focus states",
-    "state": "closed",
-    "user": {
-      "login": "builder-fern"
-    },
-    "updated_at": "2026-11-27T10:00:00Z",
-    "closed_at": "2026-11-26T11:00:00Z",
-    "body": "",
-    "labels": [],
-    "draft": false,
-    "head": {
-      "sha": "head-21"
-    },
-    "mergeable": true,
-    "mergeable_state": "clean",
-    "merged_at": "2026-11-26T11:00:00Z"
   },
   "/repos/example/repo-b/issues?state=open": [
     {

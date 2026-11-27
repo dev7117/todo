@@ -47,9 +47,12 @@ def create_app(cfg: config.Config | None = None, *, agent_work: AgentWork | None
         )
 
     @app.get("/api/agent-work")
-    def agent_work_payload(refresh: bool = False) -> dict:
-        if refresh:
-            agents.refresh()
+    def agent_work_payload() -> dict:
+        return agents.payload()
+
+    @app.post("/api/agent-work/refresh")
+    def agent_work_refresh() -> dict:
+        agents.refresh()
         return agents.payload()
 
     app.include_router(items.router(cfg.db_path))

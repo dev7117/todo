@@ -97,6 +97,7 @@ def test_closed_and_merged():
     ({}, "success", [review()], True),
     ({"draft": True}, "success", [review()], False),
     ({}, "failure", [review()], False),
+    ({}, "pending", [review()], False),
     ({"mergeable_state": "dirty"}, "success", [review()], False),
     ({"mergeable": None}, "success", [review()], False),
     ({}, "absent", [review()], False),
@@ -107,7 +108,8 @@ def test_closed_and_merged():
 def test_waiting(changes, ci, reviews, expected):
     pr = raw_pr()
     pr.update(changes)
-    assert project("example/repo-a", pr, reviews, [] if ci == "absent" else [run(ci)])["waiting_on_dev"] is expected
+    runs = [] if ci == "absent" else [run(None, "in_progress") if ci == "pending" else run(ci)]
+    assert project("example/repo-a", pr, reviews, runs)["waiting_on_dev"] is expected
 
 
 def test_latest_reviews_and_change_requests():
@@ -162,6 +164,22 @@ def test_poll_grouping_recent_window_and_etags(tmp_path):
     assert reader.payload()["repos"] == payload["repos"]
     assert reader.payload()["recent"] == payload["recent"]
     assert all("checks" not in url for url, _ in fake.calls)
+    assert not any("/pulls/21" in url for url, _ in fake.calls)
+
+
+@pytest.mark.parametrize("merged", [False, True])
+def test_closed_pr_uses_issue_list_merge_timestamp(tmp_path, merged):
+    cfg, fake, now, reader = setup_reader(tmp_path)
+    raw = fake.data["/repos/example/repo-a/issues?state=closed"][1]
+    raw["pull_request"]["merged_at"] = iso(NOW - 120) if merged else None
+    reader.refresh()
+    assert reader.last_error is None
+    item = next(item for item in reader.recent if item["number"] == 21)
+    assert item["kind"] == "pr"
+    assert item["url"] == "https://github.com/example/repo-a/pull/21"
+    assert item["state"] == ("merged" if merged else "closed")
+    assert item["closed_at"] == (iso(NOW - 120) if merged else raw["closed_at"])
+    assert not any("/pulls/21" in url for url, _ in fake.calls)
 
 
 def test_refresh_floor_and_label_changes(tmp_path):
@@ -180,7 +198,7 @@ def test_refresh_floor_and_label_changes(tmp_path):
 
 @pytest.mark.parametrize("status,headers", [
     (403, {}), (429, {"Retry-After": "600"}),
-    (200, {"X-RateLimit-Remaining": "10", "X-RateLimit-Reset": str(NOW + 900)}),
+    (200, {"X-RateLimit-Remaining": "200", "X-RateLimit-Reset": str(NOW + 900)}),
 ])
 def test_backoff_preserves_snapshot_and_safe_error(tmp_path, status, headers):
     cfg, fake, now, reader = setup_reader(tmp_path)
@@ -202,6 +220,32 @@ def test_backoff_preserves_snapshot_and_safe_error(tmp_path, status, headers):
     assert reader.last_error is None
 
 
+def test_quota_above_backoff_threshold_can_poll(tmp_path):
+    cfg, fake, now, reader = setup_reader(tmp_path)
+    fake.headers = {"X-RateLimit-Remaining": "201"}
+    reader.refresh()
+    assert reader.last_error is None
+    assert reader.payload()["repos"]
+
+
+def test_unauthorized_poll_never_leaks(tmp_path, monkeypatch):
+    cfg, fake, now, reader = setup_reader(tmp_path)
+    fake.status = 401
+    fake.data["/repos/example/repo-a/issues?state=open"] = {"message": f"Bad credentials: {TOKEN}"}
+    reader.refresh()
+    message = "GitHub could not be read. Check access and try again later."
+    assert reader.last_error == message
+    assert reader.payload()["last_error"] == message
+    assert TOKEN not in json.dumps(reader.payload())
+    monkeypatch.setattr(reader, "start", lambda: None)
+    with TestClient(create_app(cfg, agent_work=reader)) as client:
+        health = client.get("/health")
+        assert health.status_code == 200
+        assert health.json()["github"]["last_error"] == message
+        assert TOKEN not in health.text
+        assert TOKEN not in client.get("/api/agent-work").text
+
+
 def test_transport_exception_never_leaks(tmp_path):
     cfg, fake, now, reader = setup_reader(tmp_path)
     def fail(*args):
@@ -218,7 +262,7 @@ def test_unconfigured_and_existing_routes(tmp_path, token, repos):
     cfg = replace(cfg, github_token=token, github_repos=repos)
     reader = AgentWork(cfg, fake)
     with TestClient(create_app(cfg, agent_work=reader)) as client:
-        assert client.get("/api/agent-work?refresh=true").json()["configured"] is False
+        assert client.post("/api/agent-work/refresh").json()["configured"] is False
         assert client.get("/health").json()["github"] == {"configured": False, "last_poll_at": None, "last_error": None}
         assert client.get("/api/items").status_code == 200
         assert client.post("/api/items", json={"title": "Plan the garden"}).status_code == 201
@@ -232,8 +276,9 @@ def test_token_absent_from_all_json_and_database(tmp_path, monkeypatch, caplog):
     reader.refresh()
     monkeypatch.setattr(reader, "start", lambda: None)
     with TestClient(create_app(cfg, agent_work=reader)) as client:
-        for path in ("/api/agent-work", "/api/agent-work?refresh=true", "/health", "/api/items", "/api/from-v1", "/openapi.json", "/api/nope"):
+        for path in ("/api/agent-work", "/health", "/api/items", "/api/from-v1", "/openapi.json", "/api/nope"):
             assert TOKEN not in client.get(path).text
+        assert TOKEN not in client.post("/api/agent-work/refresh").text
         assert client.get("/health").json()["github"]["configured"] is True
         assert client.get("/health").json()["schema_version"] == 2
     assert TOKEN not in repr(cfg)
@@ -251,6 +296,11 @@ def test_config_clamp(monkeypatch, value, expected):
     cfg = config.load()
     assert cfg.github_poll_minutes == expected
     assert cfg.github_repos == ("example/repo-a", "example/repo-b")
+
+
+def test_config_ignores_api_base_environment(monkeypatch):
+    monkeypatch.setenv("TODO_V2_GITHUB_API_BASE", "http://example.invalid")
+    assert config.load().github_api_base == "https://api.github.com"
 
 
 def test_pagination_revalidates_every_page(tmp_path):
@@ -273,14 +323,19 @@ def test_http_refresh_floor_and_safe_health_error(tmp_path, monkeypatch):
     cfg, fake, now, reader = setup_reader(tmp_path)
     monkeypatch.setattr(reader, "start", lambda: None)
     with TestClient(create_app(cfg, agent_work=reader)) as client:
-        assert client.get("/api/agent-work?refresh=true").json()["last_error"] is None
+        assert client.get("/api/agent-work").status_code == 200
+        assert client.get("/api/agent-work?refresh=true").status_code == 200
+        assert fake.calls == []
+        response = client.post("/api/agent-work/refresh")
+        assert response.status_code == 200
+        assert response.json()["last_error"] is None
         count = len(fake.calls)
         now[0] += 59
-        client.get("/api/agent-work?refresh=true")
+        client.post("/api/agent-work/refresh")
         assert len(fake.calls) == count
         now[0] += 1
         fake.status = 429
-        body = client.get("/api/agent-work?refresh=true").json()
+        body = client.post("/api/agent-work/refresh").json()
         assert "cooldown" in body["last_error"]
         assert client.get("/health").json()["github"]["last_error"] == body["last_error"]
 

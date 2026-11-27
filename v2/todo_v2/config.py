@@ -48,6 +48,5 @@ def load() -> Config:
         github_token=os.getenv("TODO_V2_GITHUB_TOKEN", "").strip(),
         github_repos=repos(os.getenv("TODO_V2_GITHUB_REPOS", "")),
         github_poll_minutes=poll_minutes(os.getenv("TODO_V2_GITHUB_POLL_MINUTES", "5")),
-        github_api_base=os.getenv("TODO_V2_GITHUB_API_BASE", "https://api.github.com").rstrip("/"),
         v1_db_path=Path(value) if (value := os.getenv("TODO_V2_V1_DB")) else None,
     )

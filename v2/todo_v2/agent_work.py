@@ -88,12 +88,13 @@ def approved(reviews: list[dict]) -> bool:
 
 
 def project(repo: str, raw: dict, reviews: list[dict] | None = None, runs: list[dict] | None = None) -> dict:
-    is_pr = "head" in raw
-    ci = ci_state(runs or [], raw["head"]["sha"]) if is_pr else "absent"
+    is_pr = "head" in raw or "pull_request" in raw
+    ci = ci_state(runs or [], raw["head"]["sha"]) if "head" in raw else "absent"
+    merged_at = raw.get("merged_at") or raw.get("pull_request", {}).get("merged_at")
     approval = approved(reviews or [])
     closed = raw["state"] == "closed"
     if closed:
-        state = "merged" if raw.get("merged_at") else "closed"
+        state = "merged" if merged_at else "closed"
     elif not is_pr:
         state = "issue open"
     elif raw.get("draft"):
@@ -112,7 +113,7 @@ def project(repo: str, raw: dict, reviews: list[dict] | None = None, runs: list[
         "repo": repo, "number": raw["number"], "kind": "pr" if is_pr else "issue",
         "title": raw["title"], "url": f"https://github.com/{repo}/{'pull' if is_pr else 'issues'}/{raw['number']}",
         "author": (raw.get("user") or {}).get("login", "unknown"), "updated_at": raw["updated_at"],
-        "closed_at": raw.get("merged_at") or raw.get("closed_at"), "state": state, "ci": ci,
+        "closed_at": merged_at or raw.get("closed_at"), "state": state, "ci": ci,
         "waiting_on_dev": bool(waiting), "linked_issues": linked_issues(raw.get("body") or "", repo) if is_pr else [],
         "prs": [],
     }
@@ -208,7 +209,7 @@ class AgentWork:
         if result.status not in {200, 304}:
             raise PollError("GitHub could not be read. Check access and try again later.")
         try:
-            low = int(response_headers.get("x-ratelimit-remaining", "5000")) <= 10
+            low = int(response_headers.get("x-ratelimit-remaining", "5000")) <= 200
         except ValueError:
             low = False
         if low:
@@ -257,7 +258,7 @@ class AgentWork:
                 active = []
                 for raw in raw_items:
                     reviews, runs = [], []
-                    if "pull_request" in raw:
+                    if "pull_request" in raw and raw["state"] == "open":
                         raw, _ = self._get(f"{base}/pulls/{raw['number']}", touched)
                         if raw["state"] == "open":
                             reviews = self._pages(f"{base}/pulls/{raw['number']}/reviews", touched)

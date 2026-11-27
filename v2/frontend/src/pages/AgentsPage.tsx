@@ -38,7 +38,9 @@ export function useAgentWork() {
     inFlight.current = true;
     setBusy(true);
     try {
-      const response = await fetch(`/api/agent-work${refresh ? "?refresh=true" : ""}`);
+      const response = await fetch(`/api/agent-work${refresh ? "/refresh" : ""}`, {
+        method: refresh ? "POST" : "GET",
+      });
       if (!response.ok) throw new Error("Could not load agent work. Please try again.");
       const body: AgentWork = await response.json();
       if (live.current) { setData(body); setError(""); }
