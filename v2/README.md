@@ -54,3 +54,38 @@ import, within the #27 rebuild.
 ## Design
 
 `frontend/src/index.css` is v1's stylesheet copied verbatim, and `frontend/src/theme.tsx` is v1's theme (the six Underground accent presets, ink by luminance, light/dark/system via `.dark` on `<html>`). Restyle both apps together or not at all.
+
+## Tasks (core tracker stack PR 1)
+
+Migration 0003 copies `items` to the constrained `tasks` table and drops `items`.
+IDs, titles, notes and timestamps survive unchanged; `open` becomes `todo` and
+`done` stays `done`. Existing rows have no parent. The invented schema-2 fixture
+`tests/fixtures/items-v2.sqlite3` exercises this upgrade, including its backup;
+tests copy it before migration and check its source checksum afterward.
+
+`GET/POST /api/tasks` lists or creates tasks (default `todo`).
+`PATCH /api/tasks/{id}` accepts title, notes, status and nullable `parent_id`.
+Statuses are `inbox`, `todo`, `in_progress`, `waiting`, `done` and `cancelled`.
+`POST /api/tasks/{id}/complete` sets `done`; `/reopen` sets `todo`.
+Only entering `done` sets `completed_at`; leaving it clears that timestamp.
+Identical edits are no-ops, including timestamps and history. Missing tasks or
+parents return 404; invalid fields, empty titles and parent cycles return 422.
+There is no delete endpoint or old `/api/items` alias.
+
+`GET /api/tasks/{id}/history` returns changes in insertion order. Creation records
+a JSON snapshot; subsequent entries contain the field and its old/new text value
+(parent IDs are text, or null). The items era had no history, so migrated rows
+begin recording on their next edit. History inserts and task changes share a
+transaction, and SQL triggers reject history updates/deletes. Parent validation
+runs within the same immediate write transaction to prevent concurrent cycles.
+
+Every v2 connection uses WAL, foreign keys and a 5000 ms busy timeout through
+`todo_v2.db.connect`. New task, history and migration timestamps use UTC ISO-8601
+with six fractional digits and a trailing `Z`; copied timestamps are untouched.
+The separate read-only From v1 connection policy is unchanged.
+
+The home page supports inline title/notes edits, status changes, parent selection,
+subtask creation and history. Done/cancelled tasks start collapsed. A child whose
+parent belongs to the other section stays visible in its own status section,
+with the parent named on its row. Changing a parent's status does not change its
+children. Projects, Ideas, Today, markdown blocks and search belong to later PRs.

@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .db import connect, now
+
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 _NAME = re.compile(r"^(\d{4})_([a-z0-9_]+)\.sql$")
 
@@ -70,7 +72,7 @@ def backup(conn: sqlite3.Connection, db_path: Path, current: int) -> Path:
     """Online copy of the open database to `<db>.pre-migrate-<UTC stamp>-v<current>.bak`."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     target = db_path.with_name(f"{db_path.name}.pre-migrate-{stamp}-v{current}.bak")
-    dest = sqlite3.connect(target)
+    dest = connect(target)
     try:
         conn.backup(dest)
     finally:
@@ -82,7 +84,7 @@ def migrate(db_path: Path, directory: Path | None = None) -> MigrationResult:
     """Apply every pending migration to the database at `db_path` (created if missing)."""
     migrations = discover(directory)
     existed = db_path.exists()
-    conn = sqlite3.connect(db_path, isolation_level=None)  # transactions are explicit below
+    conn = connect(db_path, isolation_level=None)  # transactions are explicit below
     try:
         done = applied_versions(conn)
         unknown = done - {m.version for m in migrations}
@@ -108,7 +110,7 @@ def _apply(conn: sqlite3.Connection, migration: Migration) -> None:
         "BEGIN;\n"
         f"{migration.path.read_text()}\n;\n"
         "INSERT INTO schema_migrations (version, name, applied_at) "
-        f"VALUES ({migration.version}, '{migration.name}', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));\n"
+        f"VALUES ({migration.version}, '{migration.name}', '{now()}');\n"
         f"PRAGMA user_version = {migration.version};\n"
         "COMMIT;"
     )
