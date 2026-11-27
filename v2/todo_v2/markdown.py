@@ -8,6 +8,8 @@ from html import escape
 import re
 from urllib.parse import urlsplit
 
+MAX_RENDER_CHARS = 100_000
+
 INLINE = re.compile(r"`([^`\n]+)`|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*|\[([^\]\n]+)\]\(([^\s()]+)\)")
 
 
@@ -44,6 +46,9 @@ def inline(text: str) -> str:
 
 
 def render(body: str) -> str:
+    # Bound parser work without losing stored source text or breaking old large blocks.
+    truncated = len(body) > MAX_RENDER_CHARS
+    body = body[:MAX_RENDER_CHARS]
     output, paragraph, listing, code = [], [], [], []
     fenced = False
 
@@ -81,4 +86,6 @@ def render(body: str) -> str:
     flush()
     if fenced:
         output.append("<pre><code>" + escape("\n".join(code)) + "</code></pre>")
+    if truncated:
+        output.append("<p>Preview truncated. Edit to see the full text.</p>")
     return "\n".join(output)

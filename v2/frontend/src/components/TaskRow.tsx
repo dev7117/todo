@@ -17,12 +17,12 @@ function historyValue(entry: HistoryEntry, value: string | null) {
   return value || "Empty";
 }
 
-export default function TaskRow({ task, tasks, projects, depth, onChange, onAdd }: {
-  task: Task; tasks: Task[]; projects: Project[]; depth: number;
+export default function TaskRow({ task, tasks, projects, depth, onChange, onAdd, initiallyOpen = false }: {
+  task: Task; tasks: Task[]; projects: Project[]; depth: number; initiallyOpen?: boolean;
   onChange: (task: Task) => void; onAdd: (task: Task) => void;
 }) {
-  const [showBlocks, setShowBlocks] = useState(false);
-  const [editing, setEditing] = useState(false);
+  const [showBlocks, setShowBlocks] = useState(initiallyOpen);
+  const [editing, setEditing] = useState(initiallyOpen);
   const [title, setTitle] = useState(task.title);
   const [notes, setNotes] = useState(task.notes);
   const [parentId, setParentId] = useState(task.parent_id?.toString() ?? "");
@@ -115,7 +115,12 @@ export default function TaskRow({ task, tasks, projects, depth, onChange, onAdd 
           {projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
         </select>
       </div>
-      <div className="px-4 pb-3">
+      <div className="flex flex-wrap gap-2 px-4 pb-3">
+        <button className={`btn btn-sm ${task.is_today ? "btn-ghost" : "btn-quiet"}`}
+          aria-label={`Today for ${task.title}`} aria-pressed={task.is_today} disabled={busy}
+          onClick={() => void change({ today: !task.is_today })}>
+          {task.is_today ? "On Today" : "Add to Today"}
+        </button>
         <button className="btn btn-quiet btn-sm" aria-expanded={showBlocks} onClick={() => setShowBlocks(!showBlocks)}>
           {showBlocks ? "Hide notes & checklist" : "Notes & checklist"}
         </button>
@@ -168,7 +173,7 @@ export default function TaskRow({ task, tasks, projects, depth, onChange, onAdd 
                   {history.map((entry) => <li key={entry.id} className="[overflow-wrap:anywhere]">
                     <time dateTime={entry.timestamp} className="mr-2 text-xs text-muted">{new Date(entry.timestamp).toLocaleString()}</time>
                     {entry.field === "create" ? "Created task" : <span>
-                      {entry.field === "project_id" ? "Project" : entry.field === "parent_id" ? "Parent" : entry.field[0].toUpperCase() + entry.field.slice(1)}:
+                      {entry.field === "today_on" ? "Today" : entry.field === "project_id" ? "Project" : entry.field === "parent_id" ? "Parent" : entry.field[0].toUpperCase() + entry.field.slice(1)}:
                       {" "}{historyValue(entry, entry.old_value)} → {historyValue(entry, entry.new_value)}
                     </span>}
                   </li>)}

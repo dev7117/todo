@@ -7,7 +7,7 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
-from todo_v2 import config
+from todo_v2 import config, migrate
 from todo_v2.app import create_app
 from todo_v2.db import connect
 
@@ -70,7 +70,7 @@ def test_ideas_crud_and_filters(client, cfg):
     with closing(connect(cfg.db_path)) as conn:
         assert not conn.execute("SELECT name FROM sqlite_master WHERE name = 'idea_history'").fetchall()
         assert conn.execute("SELECT * FROM task_history").fetchall() == []
-    assert client.get("/health").json()["schema_version"] == 5
+    assert client.get("/health").json()["schema_version"] == migrate.discover()[-1].version
 
 
 @pytest.mark.parametrize("fields", [
@@ -213,5 +213,5 @@ def test_restart_preserves_idea_blocks_and_history(cfg):
         assert client.get(idea_path).json() == before
         assert client.get(task_path).json() == blocks
         assert client.get(f'/api/tasks/{task["id"]}/history').json() == history
-        assert client.get("/health").json()["schema_version"] == 5
+        assert client.get("/health").json()["schema_version"] == migrate.discover()[-1].version
     assert list(cfg.db_path.parent.glob("*.bak")) == []

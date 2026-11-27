@@ -14,7 +14,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "projects-v4.sqlite3"
 
 
 def snapshot(conn):
-    return {table: [dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY id")]
+    return {table: [{key: row[key] for key in row.keys() if key != "today_on"} for row in conn.execute(f"SELECT * FROM {table} ORDER BY id")]
             for table in ("projects", "tasks", "task_history")}
 
 
@@ -34,15 +34,27 @@ def test_schema_four_fixture_backup_and_preservation(tmp_path, monkeypatch):
         calls.append(current)
         return original_backup(conn, path, current)
     monkeypatch.setattr(migrate, "backup", backup)
+    original_apply = migrate._apply
+    def apply(conn, migration):
+        original_apply(conn, migration)
+        if migration.version == 5:
+            # Pin the 0005 rewrite before subsequent migrations run.
+            assert snapshot(conn) == before
+            assert conn.execute("SELECT * FROM ideas").fetchall() == []
+            assert conn.execute("SELECT * FROM blocks").fetchall() == []
+            assert {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")} >= {
+                "task_history_no_update", "task_history_no_delete"}
+    monkeypatch.setattr(migrate, "_apply", apply)
     result = migrate.migrate(db)
-    assert result.applied == [5] and result.schema_version == 5
+    assert result.applied == [m.version for m in migrate.discover() if m.version > 4]
+    assert result.schema_version == migrate.discover()[-1].version
     assert calls == [4] and result.backup is not None
     assert len(list(tmp_path.glob("*.bak"))) == 1
     with closing(connect(result.backup)) as conn:
         assert migrate.schema_version(conn) == 4 and snapshot(conn) == before
     with closing(connect(db)) as conn, conn:
         assert snapshot(conn) == before
-        assert migrate.schema_version(conn) == conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert migrate.schema_version(conn) == conn.execute("PRAGMA user_version").fetchone()[0] == migrate.discover()[-1].version
         assert conn.execute("SELECT * FROM ideas").fetchall() == []
         assert conn.execute("SELECT * FROM blocks").fetchall() == []
         conn.execute("INSERT INTO task_history (task_id,timestamp,field,new_value) VALUES (1,'unchanged','blocks','[]')")

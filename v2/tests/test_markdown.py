@@ -47,3 +47,22 @@ def test_supported_markdown_and_safe_links():
     assert 'href="https://example.org/herbs?a=1&amp;b=2"' in html
     assert '<pre><code>&lt;script&gt;literal&lt;/script&gt;</code></pre>' in html
     assert render('```\n<img>') == '<pre><code>&lt;img&gt;</code></pre>'
+
+
+@pytest.mark.parametrize('label', ['<script>x</script>', '\" onclick=\"alert(1)', "' onmouseover='alert(1)", '<img src=x onerror=alert(1)>'])
+def test_link_labels_are_escaped_text_not_tags_or_attributes(label):
+    from html import escape
+    html = render(f'[{label}](https://example.org/)')
+    assert f'>{escape(label)}</a>' in html
+    assert Tags(html).tags == [('p', {}), ('a', {'href': 'https://example.org/', 'rel': 'noreferrer'})]
+
+
+def test_render_input_is_bounded_without_losing_safe_output():
+    from todo_v2.markdown import MAX_RENDER_CHARS
+    source = 'a' * MAX_RENDER_CHARS
+    assert render(source) == f'<p>{source}</p>'
+    assert render(source + '<script>hidden</script>') == f'<p>{source}</p>\n<p>Preview truncated. Edit to see the full text.</p>'
+    # Truncating in the middle of a Markdown token remains escaped text.
+    html = render('a' * (MAX_RENDER_CHARS - 3) + '[<script>x</script>](https://example.org/)')
+    assert '<script' not in html
+    assert Tags(html).tags == [('p', {}), ('p', {})]

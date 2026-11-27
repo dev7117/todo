@@ -88,7 +88,7 @@ The home page supports inline title/notes edits, status changes, parent selectio
 subtask creation and history. Done/cancelled tasks start collapsed. A child whose
 parent belongs to the other section stays visible in its own status section,
 with the parent named on its row. Changing a parent's status does not change its
-children. Ideas and markdown blocks are described below; Today and search remain later work.
+children. Ideas, markdown blocks, Today and search are described below.
 
 ## Read-only GitHub agent work
 
@@ -229,5 +229,46 @@ that derived HTML reaches the UI rendering sink. XSS and syntax tests run in
 the regular v2 pytest job. This is a subset, not a full CommonMark parser.
 
 Run the v2 pytest and TypeScript commands above, and repo-root pytest for v1.
-Today, quick add, search, conversion/promotion actions and goals remain outside
-this slice of issue #18 (tracking issue #27).
+Conversion/promotion actions and goals remain outside this slice of issue #18
+(tracking issue #27).
+
+
+## Today, quick add and search (core tracker stack PR 4)
+
+Migration 0006 adds nullable `tasks.today_on`, extends append-only task history
+with `today_on`, and backfills three FTS5 external-content indexes. Source-table
+insert, update and delete triggers keep task titles/notes, idea titles/summaries
+and block bodies searchable. Startup probes FTS5 on every boot and aborts with
+an explicit error if the runtime SQLite lacks it; there is no scan fallback.
+The invented schema-5 fixture `tests/fixtures/ideas-v5.sqlite3` is copied before
+migration. Tests pin its checksum, one pre-upgrade backup, preserved source and
+history rows, and searchable backfilled content. Earlier migrations are unchanged.
+
+`TODO_V2_TZ` defaults to `America/Detroit`. A server-side clock supplies the local
+date; tests inject UTC instants, including local midnight. `POST /api/tasks` and
+`PATCH /api/tasks/{id}` accept strict boolean `today`: true sets the server's
+current date, false clears it. Each changed date records `today_on` history in
+the same transaction. Responses expose the stored date and read-time `is_today`.
+`GET /api/tasks/today` includes only today's unfinished, non-cancelled tasks.
+Old dates drop off at read time only, with no clearing write or background job.
+The Today page refreshes when reopened or the window regains focus.
+
+The Home and Today add boxes are title-only quick add using `POST /api/tasks`.
+The default remains **`todo`**, matching the existing API and SQL default.
+Only the Today box adds `today: true`; Home does not schedule the task.
+Empty/whitespace titles return 422. There is no natural-language parsing.
+Task rows include a Today toggle, including on project and task detail pages.
+
+`GET /api/search?q=...` accepts up to 500 characters and returns at most **50**
+hits, ordered by FTS rank, kind and ID. Input is escaped as one quoted literal
+phrase, so quotes, punctuation and reserved words never become MATCH operators.
+FTS tokenization still applies (punctuation alone has no tokens). Blank queries
+return no hits. Results show source kind and a plain-text excerpt (240 characters),
+linking to `/tasks/{id}` or `/ideas/{id}`; block hits link to their owner. Task
+detail links open notes and history, including finished tasks. Search URLs retain
+the query across reload and History API navigation. No keyboard map is added.
+
+Markdown rendering limits preview input to **100,000 characters** and appends a
+truncation notice. Stored text remains intact and editable. Link labels, including
+quotes and HTML, are escaped independently of URL validation. The existing XSS
+coverage remains in place; no new dependencies are required.
