@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .db import connect
 
-from . import __version__, config, from_v1, tasks, migrate
+from . import __version__, config, from_v1, tasks, migrate, projects
 from .agent_work import AgentWork
 
 
@@ -58,6 +58,7 @@ def create_app(cfg: config.Config | None = None, *, agent_work: AgentWork | None
         return agents.payload()
 
     app.include_router(tasks.router(cfg.db_path))
+    app.include_router(projects.router(cfg.db_path))
     app.include_router(from_v1.router(cfg.v1_db_path))
     _mount_frontend(app, cfg.frontend_dist)
     return app

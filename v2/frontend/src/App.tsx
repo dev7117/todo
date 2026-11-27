@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import AgentsPage, { useAgentWork } from "./pages/AgentsPage";
+import ProjectsPage from "./pages/ProjectsPage";
+import ProjectPage from "./pages/ProjectPage";
 import HomePage from "./pages/HomePage";
 import { AccentMenu, ThemeSwitch } from "./components/ThemeControls";
 
@@ -43,6 +45,7 @@ function BuildInfo() {
 
 export default function App() {
   const [path, setPath] = useState(window.location.pathname);
+  const project = /^\/projects\/(\d+)\/?$/.exec(path);
   const work = useAgentWork();
   useEffect(() => {
     const onPop = () => setPath(window.location.pathname);
@@ -52,6 +55,9 @@ export default function App() {
   function navigate(event: React.MouseEvent<HTMLAnchorElement>, to: string) {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
+    navigateTo(to);
+  }
+  function navigateTo(to: string) {
     window.history.pushState(null, "", to);
     setPath(to);
     window.scrollTo(0, 0);
@@ -65,9 +71,11 @@ export default function App() {
             <span>Todo</span>
             <span className="tag">v2</span>
           </a>
-          <nav aria-label="Main navigation" className="flex items-center gap-1">
+          <nav aria-label="Main navigation" className="order-last flex w-full items-center gap-1 sm:order-none sm:w-auto">
             <a href="/" onClick={(event) => navigate(event, "/")} aria-current={path === "/" ? "page" : undefined}
               className={`btn btn-sm ${path === "/" ? "btn-ghost" : "btn-quiet"}`}>Home</a>
+            <a href="/projects" onClick={(event) => navigate(event, "/projects")} aria-current={path.startsWith("/projects") ? "page" : undefined}
+              className={`btn btn-sm ${path.startsWith("/projects") ? "btn-ghost" : "btn-quiet"}`}>Projects</a>
             <a href="/agents" onClick={(event) => navigate(event, "/agents")} aria-current={path === "/agents" ? "page" : undefined}
               className={`btn btn-sm ${path === "/agents" ? "btn-ghost" : "btn-quiet"}`}>Agents
               {!!work.data?.waiting_on_dev.length && <span className="tag tabular" aria-label={`${work.data.waiting_on_dev.length} waiting on you`}>{work.data.waiting_on_dev.length}</span>}
@@ -80,7 +88,7 @@ export default function App() {
         </div>
       </header>
       <main className="mx-auto w-full max-w-[1280px] px-4 pb-24 pt-8 sm:px-8 sm:pt-10">
-        {path === "/agents" ? <AgentsPage work={work} /> : <HomePage />}
+        {path === "/agents" ? <AgentsPage work={work} /> : project ? <ProjectPage key={project[1]} id={Number(project[1])} /> : /^\/projects\/?$/.test(path) ? <ProjectsPage onNavigate={navigateTo} /> : <HomePage />}
         <BuildInfo />
       </main>
     </div>

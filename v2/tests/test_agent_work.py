@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from fastapi.testclient import TestClient
 
-from todo_v2 import config
+from todo_v2 import config, migrate
 from todo_v2.agent_work import AgentWork, Response, approved, ci_state, iso, linked_issues, project
 from todo_v2.app import create_app
 
@@ -280,13 +280,13 @@ def test_token_absent_from_all_json_and_database(tmp_path, monkeypatch, caplog):
             assert TOKEN not in client.get(path).text
         assert TOKEN not in client.post("/api/agent-work/refresh").text
         assert client.get("/health").json()["github"]["configured"] is True
-        assert client.get("/health").json()["schema_version"] == 3
+        assert client.get("/health").json()["schema_version"] == migrate.discover()[-1].version
     assert TOKEN not in repr(cfg)
     assert TOKEN not in caplog.text
     assert TOKEN.encode() not in cfg.db_path.read_bytes()
     with sqlite3.connect(cfg.db_path) as conn:
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert tables == {"schema_migrations", "tasks", "task_history"}
+    assert tables == {"schema_migrations", "tasks", "task_history", "projects"}
 
 
 @pytest.mark.parametrize("value,expected", [("0", 5), ("4", 5), ("5", 5), ("9", 9), ("16", 15), ("oops", 5)])

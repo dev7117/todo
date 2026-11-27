@@ -22,7 +22,11 @@ def test_items_fixture_migration_preserves_rows_and_source(tmp_path):
         assert migrate.schema_version(conn) == 2
         before = [dict(row) for row in conn.execute("SELECT * FROM items ORDER BY id")]
         assert {row["status"] for row in before} == {"open", "done"}
-    result = migrate.migrate(db)
+    first_three = tmp_path / "first-three"
+    first_three.mkdir()
+    for migration in migrate.discover()[:3]:
+        shutil.copyfile(migration.path, first_three / migration.path.name)
+    result = migrate.migrate(db, first_three)
     assert result.applied == [3]
     assert result.schema_version == 3
     assert result.backup is not None
@@ -40,6 +44,10 @@ def test_items_fixture_migration_preserves_rows_and_source(tmp_path):
         assert migrate.schema_version(conn) == 2
         conn.row_factory = sqlite3.Row
         assert [dict(row) for row in conn.execute("SELECT * FROM items ORDER BY id")] == before
+    latest = migrate.migrate(db)
+    assert latest.schema_version == migrate.discover()[-1].version
+    with closing(connect(db)) as conn:
+        assert all(row["project_id"] is None for row in conn.execute("SELECT * FROM tasks"))
     assert hashlib.sha256(FIXTURE.read_bytes()).hexdigest() == checksum
 
 

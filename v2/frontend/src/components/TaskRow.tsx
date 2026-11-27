@@ -1,14 +1,16 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import type { Project } from "../lib/projects";
 import { canParent, type HistoryEntry, request, statuses, type Status, type Task } from "../lib/tasks";
 
 function historyValue(entry: HistoryEntry, value: string | null) {
   if (entry.field === "status") return statuses[value as Status] ?? value;
+  if (entry.field === "project_id") return value === null ? "No project" : `Project #${value}`;
   if (entry.field === "parent_id") return value === null ? "No parent" : `Task #${value}`;
   return value || "Empty";
 }
 
-export default function TaskRow({ task, tasks, depth, onChange, onAdd }: {
-  task: Task; tasks: Task[]; depth: number;
+export default function TaskRow({ task, tasks, projects, depth, onChange, onAdd }: {
+  task: Task; tasks: Task[]; projects: Project[]; depth: number;
   onChange: (task: Task) => void; onAdd: (task: Task) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -74,8 +76,8 @@ export default function TaskRow({ task, tasks, depth, onChange, onAdd }: {
     <li className="border-b border-edge last:border-b-0" style={{ paddingLeft: Math.min(depth, 4) * 16 }}>
       <div className="flex flex-wrap items-start gap-3 p-4">
         <input type="checkbox" className="mt-1 h-4 w-4 shrink-0 cursor-pointer"
-          aria-label={`${task.status === "done" ? "Reopen" : "Complete"} ${task.title}`}
-          checked={task.status === "done"} disabled={busy || editing}
+          aria-label={`${task.status === "cancelled" ? "Cancelled" : task.status === "done" ? "Reopen" : "Complete"} ${task.title}`}
+          checked={task.status === "done"} disabled={busy || editing || task.status === "cancelled"}
           onChange={() => void change({ status: task.status === "done" ? "todo" : "done" })} />
         <button ref={editButton} type="button" className="min-w-0 flex-1 text-left [overflow-wrap:anywhere]"
           aria-label={`Edit ${task.title}`} aria-expanded={editing} disabled={busy}
@@ -93,6 +95,15 @@ export default function TaskRow({ task, tasks, depth, onChange, onAdd }: {
         <select aria-label={`Status for ${task.title}`} className="field field-sm max-w-full" value={task.status}
           disabled={busy || editing} onChange={(event) => void change({ status: event.target.value })}>
           {Object.entries(statuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+      </div>
+      <div className="flex min-w-0 items-center gap-2 px-4 pb-3">
+        <label htmlFor={`project-${task.id}`} className="eyebrow shrink-0">Project</label>
+        <select id={`project-${task.id}`} aria-label={`Project for ${task.title}`}
+          className="field field-sm min-w-0 max-w-full flex-1 sm:max-w-xs" value={task.project_id ?? ""}
+          disabled={busy || editing} onChange={(event) => void change({ project_id: event.target.value ? Number(event.target.value) : null })}>
+          <option value="">No project</option>
+          {projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
         </select>
       </div>
       {editing && (
@@ -141,7 +152,7 @@ export default function TaskRow({ task, tasks, depth, onChange, onAdd }: {
                   {history.map((entry) => <li key={entry.id} className="[overflow-wrap:anywhere]">
                     <time dateTime={entry.timestamp} className="mr-2 text-xs text-muted">{new Date(entry.timestamp).toLocaleString()}</time>
                     {entry.field === "create" ? "Created task" : <span>
-                      {entry.field === "parent_id" ? "Parent" : entry.field[0].toUpperCase() + entry.field.slice(1)}:
+                      {entry.field === "project_id" ? "Project" : entry.field === "parent_id" ? "Parent" : entry.field[0].toUpperCase() + entry.field.slice(1)}:
                       {" "}{historyValue(entry, entry.old_value)} → {historyValue(entry, entry.new_value)}
                     </span>}
                   </li>)}

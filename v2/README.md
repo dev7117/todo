@@ -88,7 +88,7 @@ The home page supports inline title/notes edits, status changes, parent selectio
 subtask creation and history. Done/cancelled tasks start collapsed. A child whose
 parent belongs to the other section stays visible in its own status section,
 with the parent named on its row. Changing a parent's status does not change its
-children. Projects, Ideas, Today, markdown blocks and search belong to later PRs.
+children. Ideas, Today, markdown blocks and search belong to later PRs.
 
 ## Read-only GitHub agent work
 
@@ -129,3 +129,50 @@ an environment setting. Code-level tests can construct `Config` directly.
 The tests inject a fake GET transport and prohibit network connections. Run the
 normal v2 pytest and frontend TypeScript commands above; no extra dependencies
 are needed. Home, tasks and From v1 work independently of GitHub configuration.
+
+## Projects (core tracker stack PR 2)
+
+Migration 0004 adds projects (`active`, `paused`, `done`, `archived`), optional
+`target_on` dates and nullable task `project_id` with `ON DELETE SET NULL`.
+Existing tasks remain unassigned. The migration rebuilds the history CHECK to
+allow `project_id`, preserving all rows and the append-only triggers. The
+invented schema-3 fixture `tests/fixtures/tasks-v3.sqlite3` is copied before
+migration; tests verify its checksum, preserved tasks/history and backup.
+
+`GET/POST /api/projects` lists or creates projects. `GET /api/projects/{id}`
+includes assigned tasks and progress; `PATCH /api/projects/{id}` edits title,
+Markdown description, status and target date. Titles are trimmed and must be
+non-empty. Dates must be `YYYY-MM-DD` or null. There is no delete endpoint.
+Missing projects return 404; invalid fields return 422. Identical edits leave
+`updated_at` alone. New timestamps use `todo_v2.db.now()`.
+Creating a project with `status: "done"` returns 422; complete it after creation.
+
+The UI's **Mark done** button and status editor use `PATCH /api/projects/{id}`
+with `status: "done"`. This is a UI-facing REST surface, not a caller identity
+check: there is no MCP server, agent tool or agent completion route. The router
+surface is pinned by a test so a later agent/MCP addition must revisit that rule.
+
+Assign or unassign using `PATCH /api/tasks/{id}` with `project_id` or null.
+Unknown project IDs return 422. Changes record old/new IDs in task history in
+the same transaction; identical assignments change neither history nor timestamps.
+New subtasks inherit their parent’s `project_id` inside the creation transaction;
+the initial history snapshot includes that assignment. Create requests do not
+accept explicit `project_id`; use PATCH to override or clear it afterward.
+Moving a parent later does not move its existing children. Completing a parent
+leaves children alone. Cancelled tasks have no completion timestamp and an unchecked, disabled
+checkbox; change their status using the status picker to resume them.
+
+The shared `projects.progress` helper implements PRD §4.4 for one project: count
+only its non-cancelled tasks without non-cancelled children in the same project,
+then divide done by total. A parent with only cancelled children counts as a leaf
+and contributes to done only when the parent is done. Children on other projects
+do not replace the parent. Zero counted tasks yields zero progress in the API
+and “Nothing linked yet” in the UI.
+Project status never changes automatically from task progress.
+
+`/projects` and `/projects/{id}` reuse the header’s History API navigation and
+small pathname switch; project creation uses the same navigation helper.
+The existing SPA fallback supports direct links.
+The task page and project page reuse the task rows and their project picker.
+Descriptions are stored as Markdown and displayed as plain text in this slice;
+Markdown blocks and rendering remain later work. No dependencies were added.

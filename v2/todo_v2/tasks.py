@@ -27,11 +27,12 @@ class EditTask(BaseModel):
     notes: str | None = None
     status: Status | None = None
     parent_id: Parent | None = None
+    project_id: Parent | None = None
 
     @field_validator("title", "notes", "status")
     @classmethod
     def cannot_be_null(cls, value):
-        # Omission leaves a field alone; only parent_id may explicitly be null.
+        # Omission leaves a field alone; parent_id and project_id may explicitly be null.
         if value is None:
             raise ValueError("Field must not be null")
         return value
@@ -43,6 +44,7 @@ class Task(BaseModel):
     notes: str
     status: Status
     parent_id: int | None
+    project_id: int | None
     created_at: str
     updated_at: str
     completed_at: str | None
@@ -98,11 +100,13 @@ def router(db_path: Path) -> APIRouter:
     def create_task(body: CreateTask):
         with closing(connect(db_path)) as conn, conn:
             conn.execute("BEGIN IMMEDIATE")
-            validate_parent(conn, body.parent_id)
+            # Read and inherit inside the creation transaction, so the snapshot
+            # and initial history agree even if the parent is reassigned concurrently.
+            project_id = get(conn, body.parent_id)["project_id"] if body.parent_id is not None else None
             stamp = now()
             cursor = conn.execute(
-                "INSERT INTO tasks (title, notes, parent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (body.title, body.notes, body.parent_id, stamp, stamp),
+                "INSERT INTO tasks (title, notes, parent_id, project_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (body.title, body.notes, body.parent_id, project_id, stamp, stamp),
             )
             task = get(conn, cursor.lastrowid)
             record(conn, task["id"], stamp, "create", None, json.dumps(task))
@@ -120,6 +124,9 @@ def router(db_path: Path) -> APIRouter:
                 return task
             if "parent_id" in changes:
                 validate_parent(conn, changes["parent_id"], task_id)
+            if "project_id" in changes and changes["project_id"] is not None:
+                if conn.execute("SELECT 1 FROM projects WHERE id = ?", (changes["project_id"],)).fetchone() is None:
+                    raise HTTPException(422, "Project not found")
             stamp = now()
             for field, value in changes.items():
                 record(conn, task_id, stamp, field, task[field], value)

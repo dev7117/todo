@@ -1,10 +1,12 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import FromV1 from "../components/FromV1";
 
+import { type Project, projectRequest } from "../lib/projects";
 import TaskRow from "../components/TaskRow";
 import { isFinished, request, type Task, taskTree } from "../lib/tasks";
 
 export default function HomePage() {
+  const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [title, setTitle] = useState("");
   const [loading, setLoading] = useState(true);
@@ -16,7 +18,10 @@ export default function HomePage() {
   async function load() {
     setLoading(true);
     setLoadError("");
-    try { setTasks(await request<Task[]>()); }
+    try {
+      const [allTasks, allProjects] = await Promise.all([request<Task[]>(), projectRequest<Project[]>()]);
+      setTasks(allTasks); setProjects(allProjects);
+    }
     catch (error) { setLoadError((error as Error).message); }
     finally { setLoading(false); }
   }
@@ -43,7 +48,7 @@ export default function HomePage() {
   const done = tasks.filter(isFinished);
   const append = (task: Task) => setTasks((current) => [...current, task]);
   const rows = (group: Task[]) => taskTree(group).map(({ task, depth }) => (
-    <TaskRow key={task.id} task={task} tasks={tasks} depth={depth} onChange={update} onAdd={append} />
+    <TaskRow key={task.id} task={task} tasks={tasks} projects={projects} depth={depth} onChange={update} onAdd={append} />
   ));
 
   return (
