@@ -1,0 +1,448 @@
+{
+  "/repos/example/repo-a/issues?state=open": [
+    {
+      "number": 1,
+      "title": "Make search results easier to scan",
+      "state": "open",
+      "user": {
+        "login": "builder-fern"
+      },
+      "updated_at": "2026-11-27T10:00:00Z",
+      "closed_at": null,
+      "body": "",
+      "labels": []
+    },
+    {
+      "number": 2,
+      "title": "Choose the keyboard shortcut",
+      "state": "open",
+      "user": {
+        "login": "builder-fern"
+      },
+      "updated_at": "2026-11-27T10:00:00Z",
+      "closed_at": null,
+      "body": "",
+      "labels": [
+        {
+          "name": "needs-dev"
+        }
+      ]
+    },
+    {
+      "number": 11,
+      "title": "Add compact search results",
+      "state": "open",
+      "user": {
+        "login": "builder-fern"
+      },
+      "updated_at": "2026-11-27T10:00:00Z",
+      "closed_at": null,
+      "body": "Closes #1",
+      "labels": [],
+      "draft": false,
+      "head": {
+        "sha": "head-a"
+      },
+      "mergeable": true,
+      "mergeable_state": "clean",
+      "merged_at": null,
+      "pull_request": {
+        "url": "unused"
+      }
+    },
+    {
+      "number": 12,
+      "title": "Keep filters when navigating",
+      "state": "open",
+      "user": {
+        "login": "builder-fern"
+      },
+      "updated_at": "2026-11-27T10:00:00Z",
+      "closed_at": null,
+      "body": "Refs #1",
+      "labels": [],
+      "draft": true,
+      "head": {
+        "sha": "head-12"
+      },
+      "mergeable": true,
+      "mergeable_state": "clean",
+      "merged_at": null,
+      "pull_request": {
+        "url": "unused"
+      }
+    },
+    {
+      "number": 13,
+      "title": "Improve empty-state copy",
+      "state": "open",
+      "user": {
+        "login": "builder-fern"
+      },
+      "updated_at": "2026-11-27T10:00:00Z",
+      "closed_at": null,
+      "body": "",
+      "labels": [],
+      "draft": false,
+      "head": {
+        "sha": "head-13"
+      },
+      "mergeable": true,
+      "mergeable_state": "clean",
+      "merged_at": null,
+      "pull_request": {
+        "url": "unused"
+      }
+    }
+  ],
+  "/repos/example/repo-a/issues?state=closed": [
+    {
+      "number": 20,
+      "title": "Document keyboard navigation",
+      "state": "closed",
+      "user": {
+        "login": "builder-fern"
+      },
+      "updated_at": "2026-11-27T10:00:00Z",
+      "closed_at": "2026-11-26T11:00:00Z",
+      "body": "",
+      "labels": []
+    },
+    {
+      "number": 21,
+      "title": "Add clearer focus states",
+      "state": "closed",
+      "user": {
+        "login": "builder-fern"
+      },
+      "updated_at": "2026-11-27T10:00:00Z",
+      "closed_at": "2026-11-26T11:00:00Z",
+      "body": "",
+      "labels": [],
+      "draft": false,
+      "head": {
+        "sha": "head-21"
+      },
+      "mergeable": true,
+      "mergeable_state": "clean",
+      "merged_at": "2026-11-26T11:00:00Z",
+      "pull_request": {
+        "url": "unused"
+      }
+    },
+    {
+      "number": 99,
+      "title": "Old completed work",
+      "state": "closed",
+      "user": {
+        "login": "builder-fern"
+      },
+      "updated_at": "2026-11-27T10:00:00Z",
+      "closed_at": "2026-11-17T11:00:00Z",
+      "body": "",
+      "labels": []
+    }
+  ],
+  "/repos/example/repo-a/pulls/11": {
+    "number": 11,
+    "title": "Add compact search results",
+    "state": "open",
+    "user": {
+      "login": "builder-fern"
+    },
+    "updated_at": "2026-11-27T10:00:00Z",
+    "closed_at": null,
+    "body": "Closes #1",
+    "labels": [],
+    "draft": false,
+    "head": {
+      "sha": "head-a"
+    },
+    "mergeable": true,
+    "mergeable_state": "clean",
+    "merged_at": null
+  },
+  "/repos/example/repo-a/pulls/11/reviews": [
+    {
+      "id": 1,
+      "user": {
+        "login": "reviewer-oak"
+      },
+      "state": "APPROVED",
+      "submitted_at": "2026-11-27T10:30:00Z"
+    }
+  ],
+  "/repos/example/repo-a/actions/runs?head_sha=head-a": {
+    "total_count": 2,
+    "workflow_runs": [
+      {
+        "id": 101,
+        "workflow_id": 1,
+        "run_number": 1,
+        "run_attempt": 1,
+        "head_sha": "head-a",
+        "status": "completed",
+        "conclusion": "success",
+        "path": ".github/workflows/test.yml"
+      },
+      {
+        "id": 102,
+        "workflow_id": 2,
+        "run_number": 1,
+        "run_attempt": 1,
+        "head_sha": "head-a",
+        "status": "completed",
+        "conclusion": "failure",
+        "path": ".github/workflows/claude.yml"
+      }
+    ]
+  },
+  "/repos/example/repo-a/pulls/12": {
+    "number": 12,
+    "title": "Keep filters when navigating",
+    "state": "open",
+    "user": {
+      "login": "builder-fern"
+    },
+    "updated_at": "2026-11-27T10:00:00Z",
+    "closed_at": null,
+    "body": "Refs #1",
+    "labels": [],
+    "draft": true,
+    "head": {
+      "sha": "head-12"
+    },
+    "mergeable": true,
+    "mergeable_state": "clean",
+    "merged_at": null
+  },
+  "/repos/example/repo-a/pulls/12/reviews": [],
+  "/repos/example/repo-a/actions/runs?head_sha=head-12": {
+    "total_count": 2,
+    "workflow_runs": [
+      {
+        "id": 101,
+        "workflow_id": 1,
+        "run_number": 1,
+        "run_attempt": 1,
+        "head_sha": "head-12",
+        "status": "completed",
+        "conclusion": "success",
+        "path": ".github/workflows/test.yml"
+      },
+      {
+        "id": 102,
+        "workflow_id": 2,
+        "run_number": 1,
+        "run_attempt": 1,
+        "head_sha": "head-12",
+        "status": "completed",
+        "conclusion": "failure",
+        "path": ".github/workflows/claude.yml"
+      }
+    ]
+  },
+  "/repos/example/repo-a/pulls/13": {
+    "number": 13,
+    "title": "Improve empty-state copy",
+    "state": "open",
+    "user": {
+      "login": "builder-fern"
+    },
+    "updated_at": "2026-11-27T10:00:00Z",
+    "closed_at": null,
+    "body": "",
+    "labels": [],
+    "draft": false,
+    "head": {
+      "sha": "head-13"
+    },
+    "mergeable": true,
+    "mergeable_state": "clean",
+    "merged_at": null
+  },
+  "/repos/example/repo-a/pulls/13/reviews": [],
+  "/repos/example/repo-a/actions/runs?head_sha=head-13": {
+    "total_count": 1,
+    "workflow_runs": [
+      {
+        "id": 102,
+        "workflow_id": 2,
+        "run_number": 1,
+        "run_attempt": 1,
+        "head_sha": "head-13",
+        "status": "completed",
+        "conclusion": "failure",
+        "path": ".github/workflows/claude.yml"
+      }
+    ]
+  },
+  "/repos/example/repo-a/pulls/21": {
+    "number": 21,
+    "title": "Add clearer focus states",
+    "state": "closed",
+    "user": {
+      "login": "builder-fern"
+    },
+    "updated_at": "2026-11-27T10:00:00Z",
+    "closed_at": "2026-11-26T11:00:00Z",
+    "body": "",
+    "labels": [],
+    "draft": false,
+    "head": {
+      "sha": "head-21"
+    },
+    "mergeable": true,
+    "mergeable_state": "clean",
+    "merged_at": "2026-11-26T11:00:00Z"
+  },
+  "/repos/example/repo-b/issues?state=open": [
+    {
+      "number": 3,
+      "title": "Make the export flow clearer",
+      "state": "open",
+      "user": {
+        "login": "builder-fern"
+      },
+      "updated_at": "2026-11-27T10:00:00Z",
+      "closed_at": null,
+      "body": "",
+      "labels": []
+    },
+    {
+      "number": 31,
+      "title": "Add export progress feedback",
+      "state": "open",
+      "user": {
+        "login": "builder-fern"
+      },
+      "updated_at": "2026-11-27T10:00:00Z",
+      "closed_at": null,
+      "body": "Part of #3",
+      "labels": [],
+      "draft": false,
+      "head": {
+        "sha": "head-31"
+      },
+      "mergeable": true,
+      "mergeable_state": "clean",
+      "merged_at": null,
+      "pull_request": {
+        "url": "unused"
+      }
+    },
+    {
+      "number": 32,
+      "title": "Fix long project titles",
+      "state": "open",
+      "user": {
+        "login": "builder-fern"
+      },
+      "updated_at": "2026-11-27T10:00:00Z",
+      "closed_at": null,
+      "body": "Fixes #3",
+      "labels": [],
+      "draft": false,
+      "head": {
+        "sha": "head-32"
+      },
+      "mergeable": true,
+      "mergeable_state": "clean",
+      "merged_at": null,
+      "pull_request": {
+        "url": "unused"
+      }
+    }
+  ],
+  "/repos/example/repo-b/issues?state=closed": [],
+  "/repos/example/repo-b/pulls/31": {
+    "number": 31,
+    "title": "Add export progress feedback",
+    "state": "open",
+    "user": {
+      "login": "builder-fern"
+    },
+    "updated_at": "2026-11-27T10:00:00Z",
+    "closed_at": null,
+    "body": "Part of #3",
+    "labels": [],
+    "draft": false,
+    "head": {
+      "sha": "head-31"
+    },
+    "mergeable": true,
+    "mergeable_state": "clean",
+    "merged_at": null
+  },
+  "/repos/example/repo-b/pulls/31/reviews": [],
+  "/repos/example/repo-b/actions/runs?head_sha=head-31": {
+    "total_count": 2,
+    "workflow_runs": [
+      {
+        "id": 101,
+        "workflow_id": 1,
+        "run_number": 1,
+        "run_attempt": 1,
+        "head_sha": "head-31",
+        "status": "in_progress",
+        "conclusion": null,
+        "path": ".github/workflows/test.yml"
+      },
+      {
+        "id": 102,
+        "workflow_id": 2,
+        "run_number": 1,
+        "run_attempt": 1,
+        "head_sha": "head-31",
+        "status": "completed",
+        "conclusion": "failure",
+        "path": ".github/workflows/claude.yml"
+      }
+    ]
+  },
+  "/repos/example/repo-b/pulls/32": {
+    "number": 32,
+    "title": "Fix long project titles",
+    "state": "open",
+    "user": {
+      "login": "builder-fern"
+    },
+    "updated_at": "2026-11-27T10:00:00Z",
+    "closed_at": null,
+    "body": "Fixes #3",
+    "labels": [],
+    "draft": false,
+    "head": {
+      "sha": "head-32"
+    },
+    "mergeable": true,
+    "mergeable_state": "clean",
+    "merged_at": null
+  },
+  "/repos/example/repo-b/pulls/32/reviews": [],
+  "/repos/example/repo-b/actions/runs?head_sha=head-32": {
+    "total_count": 2,
+    "workflow_runs": [
+      {
+        "id": 101,
+        "workflow_id": 1,
+        "run_number": 1,
+        "run_attempt": 1,
+        "head_sha": "head-32",
+        "status": "completed",
+        "conclusion": "failure",
+        "path": ".github/workflows/test.yml"
+      },
+      {
+        "id": 102,
+        "workflow_id": 2,
+        "run_number": 1,
+        "run_attempt": 1,
+        "head_sha": "head-32",
+        "status": "completed",
+        "conclusion": "failure",
+        "path": ".github/workflows/claude.yml"
+      }
+    ]
+  }
+}
