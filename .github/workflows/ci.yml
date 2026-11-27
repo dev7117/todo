@@ -47,3 +47,48 @@ jobs:
 
       - name: Typecheck
         run: npx tsc --noEmit
+
+  # Todo v2 (v2/). Separate jobs so v1's pytest and typecheck stay as they are.
+  v2-pytest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements-dev.txt
+
+      - name: Test
+        run: .venv/bin/python -m pytest -q
+
+  v2-typecheck:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: v2/frontend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: v2/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit

@@ -1,0 +1,432 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================================
+   Design tokens. Neutral, restrained, tool-like: one quiet canvas, hairline
+   surfaces, a single customizable accent, and motion that only ever confirms
+   what the user just did. RGB triplets so Tailwind can apply alpha.
+   `.dark` on <html> selects dark; the accent pair is overridden at runtime
+   from Settings (see theme.tsx).
+   ========================================================================== */
+:root {
+  color-scheme: light;
+  --c-stage: 0 0 0;            /* scrim behind dialogs                        */
+  --c-panel: 250 250 250;      /* app canvas                                  */
+  --c-tile: 255 255 255;       /* raised surface: cards, inputs, menus        */
+  --c-fg: 23 23 23;
+  --c-muted: 102 102 102;
+  --c-faint: 143 143 143;
+  --line: rgba(0, 0, 0, 0.12);  /* interactive hairlines (inputs, buttons)    */
+  --edge: rgba(0, 0, 0, 0.08);  /* passive hairlines (cards, dividers)        */
+  --c-accent: 79 110 247;      /* overridden from Settings                    */
+  --c-accent-ink: 255 255 255;
+  --c-danger: 220 38 38;
+  --c-success: 21 128 61;
+  --c-warning: 180 83 9;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-pop: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 8px 24px -6px rgba(0, 0, 0, 0.16),
+    0 2px 6px -2px rgba(0, 0, 0, 0.08);
+
+  /* Motion. Strong ease-out for anything entering or responding to input;
+     ease-in-out for things moving on screen. Never ease-in. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+:root.dark {
+  color-scheme: dark;
+  --c-panel: 10 10 10;
+  --c-tile: 22 22 22;
+  --c-fg: 237 237 237;
+  --c-muted: 161 161 161;
+  --c-faint: 112 112 112;
+  --line: rgba(255, 255, 255, 0.13);
+  --edge: rgba(255, 255, 255, 0.075);
+  --c-danger: 248 113 113;
+  --c-success: 74 222 128;
+  --c-warning: 250 204 21;
+  --shadow-card: none;
+  --shadow-pop: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 12px 32px -8px rgba(0, 0, 0, 0.7);
+}
+
+html {
+  background: rgb(var(--c-panel));
+}
+
+body {
+  margin: 0;
+  background: rgb(var(--c-panel));
+  color: rgb(var(--c-fg));
+  font-family: "Inter Variable", "Inter", system-ui, -apple-system, sans-serif;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  font-size: 0.875rem;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+  text-rendering: optimizeLegibility;
+}
+
+/* Focus: a soft accent ring for keyboard users only. */
+:focus-visible {
+  outline: 2px solid rgb(var(--c-accent));
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+::selection { background-color: rgb(var(--c-accent) / 0.28); }
+
+input[type="checkbox"],
+input[type="radio"],
+input[type="range"],
+progress { accent-color: rgb(var(--c-accent)); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background-color: var(--line);
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+/* Numbers that sit in columns or update in place shouldn't jitter. */
+table, .tabular { font-variant-numeric: tabular-nums; }
+
+@layer components {
+  .frame {
+    min-height: 100vh;
+    min-height: 100dvh;
+    background: rgb(var(--c-panel));
+  }
+
+  .page-title {
+    font-size: 1.75rem;
+    line-height: 1.2;
+    letter-spacing: -0.022em;
+    font-weight: 600;
+  }
+  .section-title {
+    font-size: 1rem;
+    line-height: 1.4;
+    letter-spacing: -0.011em;
+    font-weight: 600;
+  }
+
+  /* ---- Buttons ----------------------------------------------------------
+     Scale down on press so the interface visibly hears the click. Color
+     changes are instant-ish (they happen dozens of times a session). */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 36px;
+    padding-inline: 14px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    font-size: 0.875rem;
+    font-weight: 500;
+    letter-spacing: -0.006em;
+    white-space: nowrap;
+    user-select: none;
+    cursor: pointer;
+    transition: transform 160ms var(--ease-out), background-color 150ms ease,
+      border-color 150ms ease, color 150ms ease, box-shadow 150ms ease, opacity 150ms ease;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn:disabled,
+  .btn[aria-disabled="true"] { opacity: 0.45; pointer-events: none; }
+  .btn svg { flex-shrink: 0; }
+  .btn-sm { height: 32px; padding-inline: 12px; font-size: 0.8125rem; border-radius: 7px; }
+  .btn-xs { height: 26px; padding-inline: 9px; font-size: 0.75rem; border-radius: 6px; gap: 4px; }
+  .btn-icon { padding-inline: 0; width: 32px; }
+
+  .btn-primary {
+    background: rgb(var(--c-accent));
+    color: rgb(var(--c-accent-ink));
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.14), 0 1px 2px rgb(0 0 0 / 0.12);
+  }
+
+  /* Secondary surface: a raised tile with a hairline. */
+  .btn-ghost {
+    background: rgb(var(--c-tile));
+    color: rgb(var(--c-fg));
+    border-color: var(--line);
+    box-shadow: var(--shadow-card);
+  }
+
+  /* Quiet: text-only until hovered. For toolbars and icon buttons. */
+  .btn-quiet {
+    background: transparent;
+    color: rgb(var(--c-muted));
+  }
+
+  .btn-danger {
+    background: transparent;
+    color: rgb(var(--c-danger));
+    border-color: transparent;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .btn-primary:hover { background: rgb(var(--c-accent) / 0.88); }
+    .btn-ghost:hover { background: rgb(var(--c-fg) / 0.05); border-color: rgb(var(--c-fg) / 0.2); }
+    .btn-quiet:hover { background: rgb(var(--c-fg) / 0.06); color: rgb(var(--c-fg)); }
+    .btn-danger:hover { background: rgb(var(--c-danger) / 0.1); }
+  }
+
+  /* ---- Tags: small, filled, sentence-case labels ----------------------- */
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 20px;
+    padding: 2px 7px;
+    border-radius: 6px;
+    background: rgb(var(--c-fg) / 0.06);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    line-height: 1.35;
+    letter-spacing: 0;
+    color: rgb(var(--c-muted));
+    font-variant-numeric: tabular-nums;
+    /* Long values (waiting on…, a project name, a URL) wrap inside their card instead of
+       pushing out of it; unbroken strings like emails break anywhere. Short tags are unchanged. */
+    max-width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .tag > svg { flex-shrink: 0; }
+  .tag-accent { background: rgb(var(--c-accent) / 0.14); color: rgb(var(--c-accent)); }
+  .tag-success { background: rgb(var(--c-success) / 0.12); color: rgb(var(--c-success)); }
+  .tag-warning { background: rgb(var(--c-warning) / 0.14); color: rgb(var(--c-warning)); }
+  .tag-danger { background: rgb(var(--c-danger) / 0.12); color: rgb(var(--c-danger)); }
+  .dark .tag-warning { color: rgb(var(--c-warning)); }
+
+  /* ---- Navigation ------------------------------------------------------ */
+  .nav-link {
+    display: inline-flex;
+    align-items: center;
+    height: 32px;
+    padding-inline: 10px;
+    border-radius: 7px;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: rgb(var(--c-muted));
+    transition: color 150ms ease, background-color 150ms ease;
+  }
+  .nav-link[aria-current="page"] { color: rgb(var(--c-fg)); background: rgb(var(--c-fg) / 0.07); }
+
+  /* Filter tabs: a segmented control. Groups get .segmented as a track. */
+  .segmented {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 9px;
+    background: rgb(var(--c-fg) / 0.05);
+  }
+  .filter-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding-inline: 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: rgb(var(--c-muted));
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+  }
+  .filter-tab[aria-pressed="true"] {
+    color: rgb(var(--c-fg));
+    background: rgb(var(--c-tile));
+    box-shadow: 0 0 0 1px var(--edge), 0 1px 2px rgb(0 0 0 / 0.08);
+  }
+  .dark .filter-tab[aria-pressed="true"] { background: rgb(var(--c-fg) / 0.1); box-shadow: none; }
+
+  @media (hover: hover) and (pointer: fine) {
+    .nav-link:hover { color: rgb(var(--c-fg)); background: rgb(var(--c-fg) / 0.05); }
+    .nav-link[aria-current="page"]:hover { background: rgb(var(--c-fg) / 0.07); }
+    .filter-tab:hover { color: rgb(var(--c-fg)); }
+  }
+
+  /* ---- Surfaces -------------------------------------------------------- */
+  .well {
+    background: rgb(var(--c-tile));
+    border: 1px solid var(--edge);
+    border-radius: 12px;
+    box-shadow: var(--shadow-card);
+  }
+  .popover {
+    background: rgb(var(--c-tile));
+    border-radius: 12px;
+    box-shadow: var(--shadow-pop);
+  }
+
+  /* ---- Form fields ----------------------------------------------------- */
+  .field {
+    min-height: 36px;
+    background: rgb(var(--c-tile));
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px 11px;
+    font-size: 0.875rem;
+    color: rgb(var(--c-fg));
+    box-shadow: var(--shadow-card);
+    transition: border-color 150ms ease, box-shadow 150ms ease;
+  }
+  .field-sm { min-height: 32px; padding: 4px 10px; font-size: 0.8125rem; border-radius: 7px; }
+  /* iOS zooms the page when focusing an input under 16px. */
+  @media (max-width: 640px) {
+    .field, .field-sm { font-size: 16px; }
+  }
+  .field::placeholder { color: rgb(var(--c-faint)); }
+  .field:focus,
+  .field:focus-visible {
+    outline: none;
+    border-color: rgb(var(--c-accent));
+    box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.2);
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .field:hover:not(:focus) { border-color: rgb(var(--c-fg) / 0.24); }
+  }
+  select.field {
+    appearance: none;
+    padding-right: 30px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 15 5 5 5-5'/%3E%3Cpath d='m7 9 5-5 5 5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 14px;
+  }
+
+  /* Small uppercase-free label above a value. */
+  .eyebrow {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: rgb(var(--c-muted));
+  }
+
+  /* ---- Motion primitives ---------------------------------------------- */
+  .anim-fade { animation: ug-fade 200ms var(--ease-out) both; }
+  .anim-pop { animation: ug-pop 220ms var(--ease-out) both; }
+  .anim-rise { animation: ug-rise 260ms var(--ease-out) both; }
+  .anim-pop-origin-top-right { animation: ug-pop 180ms var(--ease-out) both; transform-origin: top right; }
+  /* Exits: set data-closing (see useClosing in lib/motion.ts); faster than the entrance. */
+  .anim-fade[data-closing] { animation: ug-fade-out 140ms var(--ease-out) both; }
+  .anim-pop[data-closing] { animation: ug-out 140ms var(--ease-out) both; }
+}
+
+@keyframes ug-fade { from { opacity: 0; } }
+@keyframes ug-pop { from { opacity: 0; transform: scale(0.96); } }
+@keyframes ug-rise { from { opacity: 0; transform: translateY(6px); } }
+@keyframes ug-out { to { opacity: 0; transform: scale(0.97); } }
+@keyframes ug-fade-out { to { opacity: 0; } }
+
+/* Markdown written by Claude or the user (overviews, recaps, prep). */
+@layer components {
+  .md { line-height: 1.6; overflow-wrap: anywhere; }
+  .md > * + * { margin-top: 0.6em; }
+  .md h1, .md h2, .md h3 { font-size: 0.9375rem; font-weight: 600; letter-spacing: -0.011em; margin-top: 1.1em; }
+  .md h1:first-child, .md h2:first-child, .md h3:first-child { margin-top: 0; }
+  .md ul, .md ol { padding-left: 1.25em; }
+  .md ul { list-style: disc; }
+  .md ol { list-style: decimal; }
+  .md li + li { margin-top: 0.25em; }
+  .md li::marker { color: rgb(var(--c-faint)); }
+  .md a { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: rgb(var(--c-fg) / 0.3); }
+  .md a:hover { text-decoration-color: rgb(var(--c-fg)); }
+  /* @mentions: the person's name as a quiet accent chip (the "@" before it stays as text). */
+  .md a.mention {
+    text-decoration: none; color: rgb(var(--c-accent)); font-weight: 500;
+    background: rgb(var(--c-accent) / 0.1); border-radius: 5px; padding: 0 4px;
+  }
+  .md a.mention:hover { background: rgb(var(--c-accent) / 0.18); }
+  .md code { font-size: 0.8125rem; padding: 1px 5px; border-radius: 5px; background: rgb(var(--c-fg) / 0.06); }
+  .md strong { font-weight: 600; }
+  .md a.md-image { display: inline-block; text-decoration: none; border-radius: 8px; overflow: hidden; border: 1px solid var(--edge); }
+  .md a.md-image:hover { border-color: var(--line); }
+  .md a.md-image img { display: block; max-width: 100%; max-height: 420px; object-fit: contain; }
+  .md blockquote { border-left: 2px solid var(--line); padding-left: 0.9em; color: rgb(var(--c-muted)); }
+
+  /* Customer art: a logo on a soft tile, or a monogram tinted from the name (--h). */
+  .customer-art {
+    position: relative; display: grid; place-items: center; overflow: hidden;
+    background: hsl(var(--h, 220) 40% 94%); color: hsl(var(--h, 220) 35% 35%);
+    box-shadow: var(--shadow-card), inset 0 0 0 1px var(--edge);
+  }
+  .dark .customer-art { background: hsl(var(--h, 220) 22% 15%); color: hsl(var(--h, 220) 45% 72%); }
+  .customer-art[data-logo] { background: rgb(255 255 255); }
+  .dark .customer-art[data-logo] { background: rgb(var(--c-fg) / 0.92); }
+  .customer-art img { width: 62%; height: 62%; object-fit: contain; }
+
+  /* Week calendar blocks, tinted per customer (--h). */
+  .cal-block {
+    background: hsl(var(--h, 220) 55% 94%); color: hsl(var(--h, 220) 40% 28%);
+    border-left: 2px solid hsl(var(--h, 220) 55% 52%);
+  }
+  .dark .cal-block {
+    background: hsl(var(--h, 220) 28% 17%); color: hsl(var(--h, 220) 55% 80%);
+    border-left-color: hsl(var(--h, 220) 55% 58%);
+  }
+  .cal-block[data-held] { opacity: 0.6; }
+  /* A calendar label in its meeting's colour, readable on the block or past its end. */
+  .cal-ink { color: hsl(var(--h, 220) 40% 28%); }
+  .dark .cal-ink { color: hsl(var(--h, 220) 55% 80%); }
+
+  /* Diff lines in Review. */
+  .diff { font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace; font-size: 0.8125rem; line-height: 1.55; }
+  .diff-line { display: grid; grid-template-columns: 1.4em 7.5em minmax(0, 1fr); padding: 1px 10px; }
+  .diff-line[data-op="+"] { background: rgb(var(--c-success) / 0.1); color: rgb(var(--c-success)); }
+  .diff-line[data-op="-"] { background: rgb(var(--c-danger) / 0.09); color: rgb(var(--c-danger)); }
+  .diff-line[data-op=" "] { color: rgb(var(--c-muted)); }
+  .diff-line > span:nth-child(2) { opacity: 0.75; }
+  .diff-line > span:last-child { white-space: pre-wrap; overflow-wrap: anywhere; }
+}
+
+/* Task groups, after iOS folders. Hold a dragged card over the middle of another and a
+   translucent folder plate grows behind the target while it sinks into it; drop and the new
+   group opens in place (name selected), or an existing group swallows the card with a pulse. */
+.folder-card { position: relative; isolation: isolate; }
+.folder-card::before {
+  content: ""; position: absolute; inset: -7px; z-index: -1; border-radius: 17px;
+  background: rgb(var(--c-fg) / 0.1); box-shadow: 0 0 0 1px var(--line);
+  backdrop-filter: blur(8px);
+  opacity: 0; transform: scale(0.86);
+  transition: opacity 180ms var(--ease-out), transform 260ms var(--ease-out);
+  pointer-events: none;
+}
+.folder-card[data-merge] { transform: scale(0.94); }
+.folder-card[data-merge]::before { opacity: 1; transform: scale(1); }
+.folder-card[data-merge] > * { opacity: 0.85; }
+.folder-card { transition: border-color 150ms ease, opacity 150ms ease, transform 260ms var(--ease-out); }
+.folder-absorb { animation: folder-absorb 360ms var(--ease-out); }
+.folder-open { animation: folder-open 300ms var(--ease-out) both; }
+@keyframes folder-absorb { 0% { transform: scale(0.94); } 45% { transform: scale(1.05); } 100% { transform: scale(1); } }
+@keyframes folder-open { from { opacity: 0; transform: scale(0.88); } }
+
+/* Reduced motion: keep fades (they aid comprehension), drop movement. */
+@media (prefers-reduced-motion: reduce) {
+  .btn:active { transform: none; }
+  .anim-pop, .anim-rise, .anim-pop-origin-top-right { animation-name: ug-fade; }
+  .anim-pop[data-closing] { animation-name: ug-fade-out; }
+  .folder-card[data-merge], .folder-card[data-merge]::before { transform: none; }
+  .folder-absorb { animation: none; }
+  .folder-open { animation-name: ug-fade; }
+  /* Tailwind press/hover transforms: keep the color and opacity changes, drop the movement. */
+  [class*="active:scale-"]:active,
+  .group:active [class*="group-active:scale-"],
+  [class*="hover:scale-"]:hover,
+  .group:hover [class*="group-hover:scale-"] { --tw-scale-x: 1 !important; --tw-scale-y: 1 !important; }
+  [class*="hover:-translate-y-"]:hover,
+  .group:hover [class*="group-hover:translate-y-"],
+  .group:focus-within [class*="group-focus-within:translate-y-"] { --tw-translate-y: 0 !important; }
+  [class*="translate-y-1"][class*="opacity-0"] { --tw-translate-y: 0 !important; }
+  *, *::before, *::after { scroll-behavior: auto !important; }
+}
