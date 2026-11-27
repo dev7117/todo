@@ -22,7 +22,11 @@ def test_tasks_fixture_migration_preserves_rows_history_and_source(tmp_path):
         before = [dict(row) for row in conn.execute("SELECT * FROM tasks ORDER BY id")]
         history = [dict(row) for row in conn.execute("SELECT * FROM task_history ORDER BY id")]
         assert len(before) >= 3 and len(history) >= 3
-    result = migrate.migrate(db)
+    through_four = tmp_path / "through-four"
+    through_four.mkdir()
+    for migration in migrate.discover()[:4]:
+        shutil.copyfile(migration.path, through_four / migration.path.name)
+    result = migrate.migrate(db, through_four)
     assert result.applied == [4]
     assert result.schema_version == 4
     assert result.backup is not None
@@ -50,4 +54,8 @@ def test_tasks_fixture_migration_preserves_rows_history_and_source(tmp_path):
         assert migrate.schema_version(conn) == 3
         assert [dict(row) for row in conn.execute("SELECT * FROM tasks ORDER BY id")] == before
         assert [dict(row) for row in conn.execute("SELECT * FROM task_history ORDER BY id")] == history
+    latest = migrate.migrate(db)
+    assert latest.schema_version == migrate.discover()[-1].version
+    with closing(connect(db)) as conn:
+        assert [dict(row) for row in conn.execute("SELECT * FROM task_history ORDER BY id")][:len(history)] == history
     assert hashlib.sha256(FIXTURE.read_bytes()).hexdigest() == checksum

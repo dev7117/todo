@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import AgentsPage, { useAgentWork } from "./pages/AgentsPage";
 import ProjectsPage from "./pages/ProjectsPage";
 import ProjectPage from "./pages/ProjectPage";
+import IdeasPage from "./pages/IdeasPage";
+import IdeaPage from "./pages/IdeaPage";
 import HomePage from "./pages/HomePage";
 import { AccentMenu, ThemeSwitch } from "./components/ThemeControls";
 
@@ -46,13 +48,14 @@ function BuildInfo() {
 export default function App() {
   const [path, setPath] = useState(window.location.pathname);
   const project = /^\/projects\/(\d+)\/?$/.exec(path);
+  const idea = /^\/ideas\/(\d+)\/?$/.exec(path);
   const work = useAgentWork();
   useEffect(() => {
     const onPop = () => setPath(window.location.pathname);
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
-  function navigate(event: React.MouseEvent<HTMLAnchorElement>, to: string) {
+  function navigate(event: React.MouseEvent<HTMLElement>, to: string) {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     navigateTo(to);
@@ -76,6 +79,8 @@ export default function App() {
               className={`btn btn-sm ${path === "/" ? "btn-ghost" : "btn-quiet"}`}>Home</a>
             <a href="/projects" onClick={(event) => navigate(event, "/projects")} aria-current={path.startsWith("/projects") ? "page" : undefined}
               className={`btn btn-sm ${path.startsWith("/projects") ? "btn-ghost" : "btn-quiet"}`}>Projects</a>
+            <a href="/ideas" onClick={(event) => navigate(event, "/ideas")} aria-current={path.startsWith("/ideas") ? "page" : undefined}
+              className={`btn btn-sm ${path.startsWith("/ideas") ? "btn-ghost" : "btn-quiet"}`}>Ideas</a>
             <a href="/agents" onClick={(event) => navigate(event, "/agents")} aria-current={path === "/agents" ? "page" : undefined}
               className={`btn btn-sm ${path === "/agents" ? "btn-ghost" : "btn-quiet"}`}>Agents
               {!!work.data?.waiting_on_dev.length && <span className="tag tabular" aria-label={`${work.data.waiting_on_dev.length} waiting on you`}>{work.data.waiting_on_dev.length}</span>}
@@ -87,8 +92,11 @@ export default function App() {
           </div>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-[1280px] px-4 pb-24 pt-8 sm:px-8 sm:pt-10">
-        {path === "/agents" ? <AgentsPage work={work} /> : project ? <ProjectPage key={project[1]} id={Number(project[1])} /> : /^\/projects\/?$/.test(path) ? <ProjectsPage onNavigate={navigateTo} /> : <HomePage />}
+      <main className="mx-auto w-full max-w-[1280px] px-4 pb-24 pt-8 sm:px-8 sm:pt-10" onClick={(event) => {
+        const link = (event.target as HTMLElement).closest<HTMLAnchorElement>("a[data-app-link]");
+        if (link) navigate(event, link.getAttribute("href")!);
+      }}>
+        {path === "/agents" ? <AgentsPage work={work} /> : idea ? <IdeaPage key={idea[1]} id={Number(idea[1])} /> : /^\/ideas\/?$/.test(path) ? <IdeasPage onNavigate={navigateTo} /> : project ? <ProjectPage key={project[1]} id={Number(project[1])} /> : /^\/projects\/?$/.test(path) ? <ProjectsPage onNavigate={navigateTo} /> : <HomePage />}
         <BuildInfo />
       </main>
     </div>

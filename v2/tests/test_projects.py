@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.routing import Mount
 
-from todo_v2 import config
+from todo_v2 import config, migrate
 from todo_v2.app import create_app
 from todo_v2.db import connect
 from todo_v2.projects import progress
@@ -64,7 +64,7 @@ def test_project_round_trip(client):
     assert client.get(path).status_code == 200
     health = client.get("/health").json()
     assert set(health) == {"ok", "version", "commit", "schema_version", "github"}
-    assert health["schema_version"] == 4
+    assert health["schema_version"] == migrate.discover()[-1].version
 
 
 @pytest.mark.parametrize("fields", [
@@ -174,6 +174,10 @@ def test_only_ui_rest_can_complete_projects(cfg):
     assert api_paths == {"/api/tasks", "/api/tasks/{task_id}", "/api/tasks/{task_id}/complete",
                          "/api/tasks/{task_id}/reopen", "/api/tasks/{task_id}/history", "/api/from-v1",
                          "/api/projects", "/api/projects/{project_id}",
+                         "/api/ideas", "/api/ideas/{idea_id}",
+                         "/api/tasks/{task_id}/blocks", "/api/ideas/{idea_id}/blocks",
+                         "/api/tasks/{task_id}/blocks/order", "/api/ideas/{idea_id}/blocks/order",
+                         "/api/blocks/{block_id}",
                          "/api/agent-work", "/api/agent-work/refresh"}
     assert not any("mcp" in route.path.lower() for route in routes)
     assert {(route.path, method) for route in routes if "agent" in route.path.lower()
