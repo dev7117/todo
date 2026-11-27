@@ -1,4 +1,4 @@
-"""Settings from the environment. Every name is TODO_V2_* so nothing can point v2 at v1's data."""
+"""Settings from the environment. TODO_V2_* keeps v2 storage separate; v1 is an optional read-only snapshot."""
 from __future__ import annotations
 
 import os
@@ -15,6 +15,7 @@ class Config:
     host: str
     port: int
     commit: str
+    v1_db_path: Path | None = None
 
 
 def load() -> Config:
@@ -24,4 +25,5 @@ def load() -> Config:
         host=os.getenv("TODO_V2_HOST", "0.0.0.0"),
         port=int(os.getenv("TODO_V2_PORT", "7680")),
         commit=os.getenv("GIT_SHA", "dev"),
+        v1_db_path=Path(value) if (value := os.getenv("TODO_V2_V1_DB")) else None,
     )
