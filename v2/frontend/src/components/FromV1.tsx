@@ -18,7 +18,7 @@ export default function FromV1() {
     <section className="well mt-6" aria-labelledby="from-v1-title">
       <header className="p-4">
         <h2 id="from-v1-title" className="section-title">From v1</h2>
-        <p className="mt-1 text-sm text-muted">Open tasks from your saved v1 snapshot. Read only.</p>
+        <p className="mt-1 text-sm text-muted">Open tasks from your saved v1 database. Read only.</p>
       </header>
       {items.length ? (
         <ul className="border-t border-edge">
