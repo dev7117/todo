@@ -1,4 +1,5 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import FromV1 from "../components/FromV1";
 
 interface Item {
   id: number;
@@ -170,6 +171,7 @@ export default function HomePage() {
           )}
         </>
       )}
+      <FromV1 />
     </div>
   );
 }

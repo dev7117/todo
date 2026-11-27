@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, config, items, migrate
+from . import __version__, config, from_v1, items, migrate
 
 
 def create_app(cfg: config.Config | None = None) -> FastAPI:
@@ -38,6 +38,7 @@ def create_app(cfg: config.Config | None = None) -> FastAPI:
         )
 
     app.include_router(items.router(cfg.db_path))
+    app.include_router(from_v1.router(cfg.v1_db_path))
     _mount_frontend(app, cfg.frontend_dist)
     return app
 
