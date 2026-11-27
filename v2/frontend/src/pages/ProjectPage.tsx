@@ -1,4 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
+import { api, type Idea, ideaStatuses } from "../lib/ideas";
 import TaskRow from "../components/TaskRow";
 import ProjectProgress from "../components/ProjectProgress";
 import { type Project, type ProjectDetail, type ProjectStatus, projectRequest, projectStatuses } from "../lib/projects";
@@ -6,6 +7,7 @@ import { isFinished, request, type Task, taskTree } from "../lib/tasks";
 
 export default function ProjectPage({ id }: { id: number }) {
   const [project, setProject] = useState<ProjectDetail | null>(null);
+  const [ideas, setIdeas] = useState<Idea[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [error, setError] = useState("");
@@ -19,10 +21,10 @@ export default function ProjectPage({ id }: { id: number }) {
   async function load() {
     setError("");
     try {
-      const [detail, allProjects, allTasks] = await Promise.all([
-        projectRequest<ProjectDetail>(`/${id}`), projectRequest<Project[]>(), request<Task[]>(),
+      const [detail, allProjects, allTasks, linkedIdeas] = await Promise.all([
+        projectRequest<ProjectDetail>(`/${id}`), projectRequest<Project[]>(), request<Task[]>(), api<Idea[]>(`/ideas?project_id=${id}`),
       ]);
-      setProject(detail); setProjects(allProjects); setTasks(allTasks);
+      setProject(detail); setProjects(allProjects); setTasks(allTasks); setIdeas(linkedIdeas);
     } catch (error) { setError((error as Error).message); }
   }
   useEffect(() => { void load(); }, [id]);
@@ -84,6 +86,15 @@ export default function ProjectPage({ id }: { id: number }) {
         <ProjectProgress progress={project.progress} title={project.title} />
         <p className="mt-3 text-xs text-muted">Counts tasks without non-cancelled subtasks in this project.</p>
       </div>
+      <section className="mb-8" aria-label="Project ideas">
+        <h2 className="section-title mb-1">Ideas</h2>
+        <p className="mb-3 text-xs text-muted">Context and possibilities. Ideas don’t count toward progress.</p>
+        <div className="well">{ideas.length ? <ul className="divide-y divide-edge">{ideas.map((idea) => <li key={idea.id}>
+          <a data-app-link href={`/ideas/${idea.id}`} className="flex flex-wrap items-center justify-between gap-2 p-4">
+            <span className="min-w-0 [overflow-wrap:anywhere]">{idea.title}</span><span className="tag">{ideaStatuses[idea.status]}</span>
+          </a>
+        </li>)}</ul> : <p className="p-4 text-sm text-muted">No linked ideas yet. <a data-app-link className="underline" href="/ideas">Browse ideas</a></p>}</div>
+      </section>
       <div className="mb-3 flex items-center justify-between gap-3">
         <h2 className="section-title">Tasks</h2><a href="/" className="btn btn-quiet btn-sm">Manage tasks</a>
       </div>

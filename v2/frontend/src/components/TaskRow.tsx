@@ -1,8 +1,16 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import BlocksEditor from "./BlocksEditor";
+import type { Block } from "../lib/blocks";
 import type { Project } from "../lib/projects";
 import { canParent, type HistoryEntry, request, statuses, type Status, type Task } from "../lib/tasks";
 
 function historyValue(entry: HistoryEntry, value: string | null) {
+  if (entry.field === "blocks") {
+    try {
+      const blocks = JSON.parse(value ?? "[]") as Block[];
+      return blocks.length ? blocks.map((block) => `${block.kind === "note" ? "Note" : block.done ? "Checked" : "Unchecked"}: ${block.body}`).join("; ") : "No blocks";
+    } catch { return "Blocks updated"; }
+  }
   if (entry.field === "status") return statuses[value as Status] ?? value;
   if (entry.field === "project_id") return value === null ? "No project" : `Project #${value}`;
   if (entry.field === "parent_id") return value === null ? "No parent" : `Task #${value}`;
@@ -13,6 +21,7 @@ export default function TaskRow({ task, tasks, projects, depth, onChange, onAdd 
   task: Task; tasks: Task[]; projects: Project[]; depth: number;
   onChange: (task: Task) => void; onAdd: (task: Task) => void;
 }) {
+  const [showBlocks, setShowBlocks] = useState(false);
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(task.title);
   const [notes, setNotes] = useState(task.notes);
@@ -106,6 +115,13 @@ export default function TaskRow({ task, tasks, projects, depth, onChange, onAdd 
           {projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
         </select>
       </div>
+      <div className="px-4 pb-3">
+        <button className="btn btn-quiet btn-sm" aria-expanded={showBlocks} onClick={() => setShowBlocks(!showBlocks)}>
+          {showBlocks ? "Hide notes & checklist" : "Notes & checklist"}
+        </button>
+      </div>
+      {showBlocks && <div className="px-4 pb-5"><BlocksEditor owner="tasks" id={task.id}
+        onChange={() => setHistoryRetry((value) => value + 1)} /></div>}
       {editing && (
         <div className="space-y-4 px-4 pb-4" onKeyDown={(event) => {
           if (event.key === "Escape" && !busy) { event.stopPropagation(); closeEditor(); }

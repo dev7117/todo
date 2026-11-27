@@ -88,7 +88,7 @@ The home page supports inline title/notes edits, status changes, parent selectio
 subtask creation and history. Done/cancelled tasks start collapsed. A child whose
 parent belongs to the other section stays visible in its own status section,
 with the parent named on its row. Changing a parent's status does not change its
-children. Ideas, Today, markdown blocks and search belong to later PRs.
+children. Ideas and markdown blocks are described below; Today and search remain later work.
 
 ## Read-only GitHub agent work
 
@@ -175,4 +175,59 @@ small pathname switch; project creation uses the same navigation helper.
 The existing SPA fallback supports direct links.
 The task page and project page reuse the task rows and their project picker.
 Descriptions are stored as Markdown and displayed as plain text in this slice;
-Markdown blocks and rendering remain later work. No dependencies were added.
+Blocks use the safe Markdown subset described below. No dependencies were added.
+
+## Ideas and blocks (core tracker stack PR 3)
+
+Migration 0005 adds ideas and owner-scoped blocks, and extends task history's
+CHECK with `blocks` while preserving its rows and append-only triggers.
+The invented `tests/fixtures/projects-v4.sqlite3` contains only sample projects,
+tasks and audit rows from migrations 0001–0004. Tests copy it before upgrading,
+verify one pre-upgrade online backup, and check its unchanged source checksum.
+
+`GET/POST /api/ideas` lists or creates ideas. List filters are `status` and
+`project_id` (combined with AND); results are ordered by ID. The default status
+is `seed`; other statuses are `exploring`, `parked`, `promoted`, `dropped`.
+`GET /api/ideas/{id}` includes ordered blocks; PATCH edits title, summary,
+status and nullable project assignment. Unknown projects return 422; missing
+ideas return 404. There is no delete or promote action. An ordinary status edit
+to `promoted` creates nothing. Summaries display as plain text.
+
+For either `/api/tasks/{id}` or `/api/ideas/{id}`:
+
+- `GET /blocks` reads the ordered blocks; `POST /blocks` adds `{kind, body}`.
+- `PUT /blocks/order` accepts `{ids: [...]}`, a complete permutation of that
+  owner's current block IDs. Stale, duplicate, missing or foreign IDs return 422.
+- `PATCH /api/blocks/{id}` edits `body` and/or a strict boolean `done`.
+- `DELETE /api/blocks/{id}` returns 204.
+
+Kinds are `note` and `subtask` (shown as “Checklist” in the UI). Kind and owner
+are immutable. Only checklist blocks accept `done`; checking sets `done_at`,
+unchecking clears it, and identical edits are no-ops. SQL enforces exactly one
+owner, unique nonnegative positions, and valid completion state. Block IDs are
+never reused, so audit snapshots cannot confuse deleted blocks with new ones.
+Missing owners/blocks return 404. All writes serialize validation and changes
+in one immediate transaction through the existing connection helper.
+
+Task block changes append one `blocks` history entry with ordered before/after
+JSON snapshots in the same transaction and update the task timestamp. Ideas
+have no audit table; block changes update the idea timestamp. The project
+progress query is unchanged: ideas and checklist blocks never count as tasks.
+
+`/ideas` groups ideas by status and filters by status/project. `/ideas/{id}`
+shows the summary, project link and shared blocks editor. Task rows expose
+“Notes & checklist” separately from their existing notes and parent subtasks.
+Project pages list linked ideas as context. Navigation uses the existing
+History API helper and styles reuse the existing component classes.
+
+No Markdown dependency was added. `todo_v2.markdown` implements a deliberately
+small subset: paragraphs/line breaks, headings, unordered lists, fenced/inline
+code, strong/emphasis and links. Raw HTML always becomes escaped text. Links
+allow only HTTP(S), mailto and fragment targets; unsafe destinations are removed.
+The API derives `body_html` from stored Markdown on every response, and only
+that derived HTML reaches the UI rendering sink. XSS and syntax tests run in
+the regular v2 pytest job. This is a subset, not a full CommonMark parser.
+
+Run the v2 pytest and TypeScript commands above, and repo-root pytest for v1.
+Today, quick add, search, conversion/promotion actions and goals remain outside
+this slice of issue #18 (tracking issue #27).
