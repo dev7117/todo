@@ -22,8 +22,14 @@ def migrations(tmp_path: Path) -> Path:
     return directory
 
 
-def add_migration(directory: Path, name: str, sql: str) -> None:
-    (directory / name).write_text(sql)
+def add_migration(directory: Path, name: str, sql: str, *, gap: int = 1) -> Path:
+    version = migrate.discover(directory)[-1].version + gap
+    path = directory / f"{version:04d}_{name}.sql"
+    path.write_text(sql)
+    return path
+
+
+LATEST = migrate.discover()[-1].version
 
 
 def backups(db: Path) -> list[Path]:
@@ -89,22 +95,22 @@ def test_backup_is_taken_before_the_pending_migration_applies(db: Path, migratio
     # Write the kept row into a table this test's own migration creates.
     add_migration(
         migrations,
-        "0002_widgets.sql",
+        "widgets",
         "CREATE TABLE widgets (id INTEGER PRIMARY KEY, name TEXT NOT NULL);",
     )
     migrate.migrate(db, migrations)
     with closing(sqlite3.connect(db)) as conn, conn:
         conn.execute("INSERT INTO widgets (name) VALUES ('kept')")
     already = set(backups(db))
-    add_migration(migrations, "0003_gadgets.sql", "CREATE TABLE gadgets (id INTEGER PRIMARY KEY);")
+    add_migration(migrations, "gadgets", "CREATE TABLE gadgets (id INTEGER PRIMARY KEY);")
 
     result = migrate.migrate(db, migrations)
 
     new = [b for b in backups(db) if b not in already]
     assert len(new) == 1 and result.backup == new[0]
     # The live DB has the change; the backup is the state just before it.
-    assert "gadgets" in tables(db) and version_of(db) == 3
-    assert "gadgets" not in tables(new[0]) and version_of(new[0]) == 2
+    assert "gadgets" in tables(db) and version_of(db) == LATEST + 2
+    assert "gadgets" not in tables(new[0]) and version_of(new[0]) == LATEST + 1
     with closing(sqlite3.connect(new[0])) as copy:
         assert copy.execute("SELECT name FROM widgets").fetchone() == ("kept",)
         assert copy.execute("PRAGMA integrity_check").fetchone() == ("ok",)
@@ -113,16 +119,16 @@ def test_backup_is_taken_before_the_pending_migration_applies(db: Path, migratio
 def test_several_pending_migrations_make_exactly_one_backup(db: Path, migrations: Path) -> None:
     migrate.migrate(db, migrations)
     already = set(backups(db))
-    add_migration(migrations, "0002_widgets.sql", "CREATE TABLE widgets (id INTEGER PRIMARY KEY);")
-    add_migration(migrations, "0003_gadgets.sql", "CREATE TABLE gadgets (id INTEGER PRIMARY KEY);")
+    add_migration(migrations, "widgets", "CREATE TABLE widgets (id INTEGER PRIMARY KEY);")
+    add_migration(migrations, "gadgets", "CREATE TABLE gadgets (id INTEGER PRIMARY KEY);")
 
     result = migrate.migrate(db, migrations)
 
-    assert result.applied == [2, 3]
+    assert result.applied == [LATEST + 1, LATEST + 2]
     new = [b for b in backups(db) if b not in already]
     assert len(new) == 1
     # Taken before either applied.
-    assert version_of(new[0]) == 1
+    assert version_of(new[0]) == LATEST
     assert not {"widgets", "gadgets"} & tables(new[0])
 
 
@@ -138,12 +144,12 @@ def test_first_boot_makes_no_backup(db: Path) -> None:
 
 
 def test_fresh_db_with_several_pending_makes_no_backup(db: Path, migrations: Path) -> None:
-    add_migration(migrations, "0002_widgets.sql", "CREATE TABLE widgets (id INTEGER PRIMARY KEY);")
+    add_migration(migrations, "widgets", "CREATE TABLE widgets (id INTEGER PRIMARY KEY);")
     assert not db.exists()
 
     result = migrate.migrate(db, migrations)
 
-    assert result.applied == [1, 2]
+    assert result.applied == list(range(1, LATEST + 2))
     assert result.backup is None
     assert backups(db) == []
     assert "widgets" in tables(db)
@@ -152,27 +158,27 @@ def test_fresh_db_with_several_pending_makes_no_backup(db: Path, migrations: Pat
 def test_a_failing_migration_rolls_back_and_leaves_earlier_ones(db: Path, migrations: Path) -> None:
     migrate.migrate(db, migrations)
     add_migration(
-        migrations, "0002_broken.sql",
+        migrations, "broken",
         "CREATE TABLE half_done (id INTEGER PRIMARY KEY);\nINSERT INTO no_such_table VALUES (1);",
     )
 
     with pytest.raises(sqlite3.OperationalError):
         migrate.migrate(db, migrations)
 
-    assert version_of(db) == 1
+    assert version_of(db) == LATEST
     assert "half_done" not in tables(db)
 
 
 def test_numbering_gaps_are_rejected(migrations: Path) -> None:
-    add_migration(migrations, "0003_skipped_two.sql", "SELECT 1;")
+    add_migration(migrations, "skipped", "SELECT 1;", gap=2)
     with pytest.raises(ValueError, match="without gaps"):
         migrate.discover(migrations)
 
 
 def test_a_db_ahead_of_this_build_is_refused(db: Path, migrations: Path) -> None:
-    add_migration(migrations, "0002_widgets.sql", "CREATE TABLE widgets (id INTEGER PRIMARY KEY);")
+    added = add_migration(migrations, "widgets", "CREATE TABLE widgets (id INTEGER PRIMARY KEY);")
     migrate.migrate(db, migrations)
-    (migrations / "0002_widgets.sql").unlink()
+    added.unlink()
 
     with pytest.raises(RuntimeError, match="doesn't know"):
         migrate.migrate(db, migrations)
