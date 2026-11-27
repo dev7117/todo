@@ -1,4 +1,4 @@
-"""Optional view of a static, checkpointed v1 database file; never an import."""
+"""Optional read-only view of a v1 database; never an import."""
 from contextlib import closing
 from pathlib import Path
 import sqlite3
@@ -14,9 +14,10 @@ def router(db_path: Path | None) -> APIRouter:
         if db_path is None or not db_path.is_file():
             return {"enabled": False, "items": []}
         try:
-            # immutable avoids locks, checkpoints, and writable WAL shared-memory files.
-            # It reads only checkpointed pages: use a static snapshot, not a changing DB.
-            uri = db_path.resolve().as_uri() + "?mode=ro&immutable=1"
+            # Read committed WAL rows when the sidecar is present. Without it,
+            # immutable reads the main file without creating WAL/shared-memory files.
+            mode = "mode=ro" if Path(str(db_path) + "-wal").exists() else "mode=ro&immutable=1"
+            uri = db_path.resolve().as_uri() + "?" + mode
             with closing(sqlite3.connect(uri, uri=True)) as conn:
                 rows = conn.execute(
                     "SELECT title FROM tasks WHERE status NOT IN ('done', 'cancelled') ORDER BY id"

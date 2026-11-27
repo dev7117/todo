@@ -1,10 +1,10 @@
 """Committed fixtures contain only invented titles and all six v1 task statuses."""
-from contextlib import closing
 from dataclasses import replace
 import hashlib
 from pathlib import Path
 import shutil
-import sqlite3
+import subprocess
+import sys
 
 import pytest
 from fastapi.testclient import TestClient
@@ -67,20 +67,51 @@ def test_read_only_directory_and_uri_characters(tmp_path):
         source.chmod(0o644)
 
 
-def test_pending_wal_is_ignored_without_touching_files(tmp_path):
+def test_pending_wal_is_visible_without_touching_read_only_files(tmp_path):
     directory = tmp_path / "legacy"
     directory.mkdir()
     source = directory / "v1.sqlite3"
     shutil.copyfile(FIXTURES / "v1-wal.sqlite3", source)
-    with closing(sqlite3.connect(source)) as writer:
-        writer.execute("PRAGMA wal_autocheckpoint=0")
-        writer.execute("INSERT INTO tasks (title, status) VALUES ('Only in the pending WAL', 'todo')")
-        writer.commit()
-        assert Path(str(source) + "-wal").stat().st_size > 0
-        before = {path.name: checksum(path) for path in directory.iterdir()}
-        # Documents immutable's deliberate limitation: checkpointed contents only.
-        assert read_view(tmp_path, source).json() == {"enabled": True, "items": OPEN}
-        assert {path.name: checksum(path) for path in directory.iterdir()} == before
+    # A separate v1 process prevents the reader from reusing a writable SHM mapping.
+    writer_script = """
+import sqlite3
+import sys
+from contextlib import closing
+
+with closing(sqlite3.connect(sys.argv[1])) as writer:
+    writer.execute("PRAGMA wal_autocheckpoint=0")
+    writer.execute("INSERT INTO tasks (title, status) VALUES ('Only in the pending WAL', 'todo')")
+    writer.commit()
+    print("ready", flush=True)
+    sys.stdin.read()
+"""
+    with subprocess.Popen(
+        [sys.executable, "-c", writer_script, str(source)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+    ) as writer:
+        try:
+            assert writer.stdout.readline().strip() == "ready"
+            assert Path(str(source) + "-wal").stat().st_size > 0
+            files = [source, Path(str(source) + "-wal"), Path(str(source) + "-shm")]
+            before = {path.name: checksum(path) for path in files}
+            modes = {path: path.stat().st_mode & 0o777 for path in [directory, *files]}
+            try:
+                for path in files:
+                    path.chmod(0o444)
+                directory.chmod(0o555)
+                # Keep the writer open so closing it cannot checkpoint away the WAL.
+                response = read_view(tmp_path, source)
+                assert response.status_code == 200
+                assert response.json() == {
+                    "enabled": True, "items": OPEN + ["Only in the pending WAL"]
+                }
+                assert {path.name: checksum(path) for path in directory.iterdir()} == before
+            finally:
+                for path, mode in modes.items():
+                    path.chmod(mode)
+        finally:
+            writer.communicate(timeout=10)
+        assert writer.returncode == 0
 
 
 def test_invalid_snapshot_does_not_expose_path(tmp_path):

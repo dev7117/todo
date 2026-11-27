@@ -28,28 +28,28 @@ Container: `docker build -f v2/Dockerfile -t todo-v2:local v2`, then run it with
 
 On startup, if anything is pending, the runner first takes one online backup (SQLite backup API) to `<db>.pre-migrate-<UTC stamp>-v<current>.bak` beside the database, then applies every pending migration. Nothing pending means no backup.
 
-## Optional v1 snapshot view
+## Optional v1 view
 
-Set `TODO_V2_V1_DB` to a **static, checkpointed copy** of a v1 database to show its open
+Set `TODO_V2_V1_DB` to a v1 database to show its open
 tasks in the read-only "From v1" section. Unset or missing files hide the section;
 `GET /api/from-v1` returns `{"enabled": false, "items": []}`. Enabled responses contain
 an array of titles, excluding `done` and `cancelled`. An unreadable or incompatible
-snapshot returns 503 without exposing its path.
+database returns 503 without exposing its path.
 
 For a preview container, add these arguments to `docker run`:
 
 ```bash
---mount type=bind,src=/path/to/todo.db,dst=/legacy/todo.db,readonly \
+--mount type=bind,src=/path/to/v1-data,dst=/legacy,readonly \
 --env TODO_V2_V1_DB=/legacy/todo.db
 ```
 
-The connection uses SQLite URI `mode=ro&immutable=1`. This avoids writes, locks,
-checkpoints and `-shm` creation even for a WAL-mode file in a read-only directory.
-It ignores uncheckpointed WAL transactions, so do not mount a changing live database
-or copy only its main file while writes are pending. Supply a consistent standalone
-snapshot produced by SQLite's backup API or after the source is cleanly closed.
-Replace the snapshot while the preview is stopped. This view does not import or
-edit v1 tasks; #20 owns the import, within the #27 rebuild.
+Mount the whole v1 data folder read-only so the `-wal` and `-shm` files are visible
+when present. The connection uses SQLite URI `mode=ro` when a `-wal` file exists
+beside the database, making committed WAL rows visible. Otherwise it uses
+`mode=ro&immutable=1` to read the main file without creating sidecars, including
+for a WAL-mode file in a read-only directory. The view never writes or checkpoints
+the source database. This view does not import or edit v1 tasks; #20 owns the
+import, within the #27 rebuild.
 
 ## Design
 
