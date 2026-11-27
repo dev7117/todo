@@ -1,6 +1,7 @@
 """The migration runner: forward-only, recorded in schema_migrations, one online backup per run."""
 import shutil
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -30,25 +31,19 @@ def backups(db: Path) -> list[Path]:
 
 
 def tables(path: Path) -> set[str]:
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn:
         return {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
 
 
 def schema_dump(path: Path) -> list[tuple]:
-    conn = sqlite3.connect(path)
-    try:
+    with closing(sqlite3.connect(path)) as conn:
         rows = conn.execute("SELECT type, name, sql FROM sqlite_master ORDER BY name").fetchall()
         return rows + [("user_version", conn.execute("PRAGMA user_version").fetchone()[0], None)]
-    finally:
-        conn.close()
 
 
 def version_of(path: Path) -> int:
-    conn = sqlite3.connect(path)
-    try:
+    with closing(sqlite3.connect(path)) as conn:
         return migrate.schema_version(conn)
-    finally:
-        conn.close()
 
 
 def test_fresh_db_migrates(db: Path) -> None:
@@ -61,13 +56,10 @@ def test_fresh_db_migrates(db: Path) -> None:
     assert "settings" not in tables(db)
     assert result.backup is None
     assert backups(db) == []
-    conn = sqlite3.connect(db)
-    try:
+    with closing(sqlite3.connect(db)) as conn:
         recorded = [r[0] for r in conn.execute("SELECT version FROM schema_migrations ORDER BY version")]
         assert recorded == shipped
         assert conn.execute("PRAGMA user_version").fetchone()[0] == shipped[-1]
-    finally:
-        conn.close()
 
 
 def test_rerun_is_a_noop(db: Path) -> None:
@@ -101,7 +93,7 @@ def test_backup_is_taken_before_the_pending_migration_applies(db: Path, migratio
         "CREATE TABLE widgets (id INTEGER PRIMARY KEY, name TEXT NOT NULL);",
     )
     migrate.migrate(db, migrations)
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         conn.execute("INSERT INTO widgets (name) VALUES ('kept')")
     already = set(backups(db))
     add_migration(migrations, "0003_gadgets.sql", "CREATE TABLE gadgets (id INTEGER PRIMARY KEY);")
@@ -113,7 +105,7 @@ def test_backup_is_taken_before_the_pending_migration_applies(db: Path, migratio
     # The live DB has the change; the backup is the state just before it.
     assert "gadgets" in tables(db) and version_of(db) == 3
     assert "gadgets" not in tables(new[0]) and version_of(new[0]) == 2
-    with sqlite3.connect(new[0]) as copy:
+    with closing(sqlite3.connect(new[0])) as copy:
         assert copy.execute("SELECT name FROM widgets").fetchone() == ("kept",)
         assert copy.execute("PRAGMA integrity_check").fetchone() == ("ok",)
 
