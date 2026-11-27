@@ -47,13 +47,14 @@ def test_restart_with_a_pending_migration_makes_exactly_one_backup(
     shutil.copytree(migrate.MIGRATIONS_DIR, directory)
     monkeypatch.setattr(migrate, "MIGRATIONS_DIR", directory)
 
-    assert boot(cfg)["schema_version"] == 1  # first boot: file did not exist
+    latest = migrate.discover()[-1].version
+    assert boot(cfg)["schema_version"] == latest  # first boot: file did not exist
     assert backups(cfg) == []
-    assert boot(cfg)["schema_version"] == 1  # restart, nothing pending
+    assert boot(cfg)["schema_version"] == latest  # restart, nothing pending
     assert backups(cfg) == []
 
-    (directory / "0002_widgets.sql").write_text("CREATE TABLE widgets (id INTEGER PRIMARY KEY);")
-    assert boot(cfg)["schema_version"] == 2  # restart with one pending
+    (directory / f"{latest + 1:04d}_widgets.sql").write_text("CREATE TABLE widgets (id INTEGER PRIMARY KEY);")
+    assert boot(cfg)["schema_version"] == latest + 1  # restart with one pending
     assert len(backups(cfg)) == 1
 
 
