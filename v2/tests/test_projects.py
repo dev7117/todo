@@ -171,7 +171,7 @@ def test_only_ui_rest_can_complete_projects(cfg):
     routes = list(flattened(app))
     assert not any(isinstance(route, Mount) and route.path != "/assets" for route in routes)
     api_paths = {route.path for route in routes if route.path.startswith("/api/")}
-    assert api_paths == {"/api/tasks", "/api/tasks/{task_id}", "/api/tasks/{task_id}/complete",
+    assert api_paths == {"/api/search", "/api/tasks/today", "/api/tasks", "/api/tasks/{task_id}", "/api/tasks/{task_id}/complete",
                          "/api/tasks/{task_id}/reopen", "/api/tasks/{task_id}/history", "/api/from-v1",
                          "/api/projects", "/api/projects/{project_id}",
                          "/api/ideas", "/api/ideas/{idea_id}",

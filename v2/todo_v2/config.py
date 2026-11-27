@@ -16,6 +16,7 @@ class Config:
     host: str
     port: int
     commit: str
+    timezone: str = "America/Detroit"
     v1_db_path: Path | None = None
     github_token: str = field(default="", repr=False)
     github_repos: tuple[str, ...] = ()
@@ -45,6 +46,7 @@ def load() -> Config:
         host=os.getenv("TODO_V2_HOST", "0.0.0.0"),
         port=int(os.getenv("TODO_V2_PORT", "7680")),
         commit=os.getenv("GIT_SHA", "dev"),
+        timezone=os.getenv("TODO_V2_TZ", "America/Detroit"),
         github_token=os.getenv("TODO_V2_GITHUB_TOKEN", "").strip(),
         github_repos=repos(os.getenv("TODO_V2_GITHUB_REPOS", "")),
         github_poll_minutes=poll_minutes(os.getenv("TODO_V2_GITHUB_POLL_MINUTES", "5")),

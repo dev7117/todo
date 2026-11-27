@@ -286,7 +286,9 @@ def test_token_absent_from_all_json_and_database(tmp_path, monkeypatch, caplog):
     assert TOKEN.encode() not in cfg.db_path.read_bytes()
     with sqlite3.connect(cfg.db_path) as conn:
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert tables == {"schema_migrations", "tasks", "task_history", "projects", "ideas", "blocks", "sqlite_sequence"}
+    fts_tables = {f"{source}_fts{suffix}" for source in ("tasks", "ideas", "blocks")
+                  for suffix in ("", "_data", "_idx", "_docsize", "_config")}
+    assert tables == {"schema_migrations", "tasks", "task_history", "projects", "ideas", "blocks", "sqlite_sequence"} | fts_tables
 
 
 @pytest.mark.parametrize("value,expected", [("0", 5), ("4", 5), ("5", 5), ("9", 9), ("16", 15), ("oops", 5)])

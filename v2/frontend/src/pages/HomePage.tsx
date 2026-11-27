@@ -5,7 +5,7 @@ import { type Project, projectRequest } from "../lib/projects";
 import TaskRow from "../components/TaskRow";
 import { isFinished, request, type Task, taskTree } from "../lib/tasks";
 
-export default function HomePage() {
+export default function HomePage({ today = false, taskId }: { today?: boolean; taskId?: number }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [title, setTitle] = useState("");
@@ -15,8 +15,8 @@ export default function HomePage() {
   const [error, setError] = useState("");
   const addInput = useRef<HTMLInputElement>(null);
 
-  async function load() {
-    setLoading(true);
+  async function load(silent = false) {
+    if (!silent) setLoading(true);
     setLoadError("");
     try {
       const [allTasks, allProjects] = await Promise.all([request<Task[]>(), projectRequest<Project[]>()]);
@@ -25,7 +25,12 @@ export default function HomePage() {
     catch (error) { setLoadError((error as Error).message); }
     finally { setLoading(false); }
   }
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    void load();
+    const refresh = () => { void load(true); };
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, []);
 
   async function add(event: FormEvent) {
     event.preventDefault();
@@ -33,7 +38,7 @@ export default function HomePage() {
     setBusy(true);
     setError("");
     try {
-      const task = await request<Task>("", "POST", { title });
+      const task = await request<Task>("", "POST", { title, ...(today ? { today: true } : {}) });
       setTasks((current) => [...current, task]);
       setTitle("");
     } catch (error) { setError((error as Error).message); }
@@ -44,37 +49,38 @@ export default function HomePage() {
   }
 
   const update = (task: Task) => setTasks((current) => current.map((old) => old.id === task.id ? task : old));
-  const open = tasks.filter((task) => !isFinished(task));
-  const done = tasks.filter(isFinished);
+  const visible = tasks.filter((task) => taskId ? task.id === taskId : !today || task.is_today);
+  const open = taskId ? visible : visible.filter((task) => !isFinished(task));
+  const done = today || taskId ? [] : visible.filter(isFinished);
   const append = (task: Task) => setTasks((current) => [...current, task]);
   const rows = (group: Task[]) => taskTree(group).map(({ task, depth }) => (
-    <TaskRow key={task.id} task={task} tasks={tasks} projects={projects} depth={depth} onChange={update} onAdd={append} />
+    <TaskRow key={task.id} task={task} tasks={tasks} projects={projects} depth={depth} initiallyOpen={!!taskId} onChange={update} onAdd={append} />
   ));
 
   return (
     <div className="anim-fade">
       <header className="mb-8">
-        <h1 className="page-title">Tasks</h1>
-        <p className="mt-1 text-muted">A little room for what needs doing.</p>
+        <h1 className="page-title">{taskId ? "Task" : today ? "Today" : "Tasks"}</h1>
+        <p className="mt-1 text-muted">{taskId ? "Details, notes, and every change." : today ? "A little focus for the day ahead." : "A little room for what needs doing."}</p>
       </header>
-      <form className="mb-6 flex gap-2" onSubmit={add}>
-        <input ref={addInput} className="field min-w-0 flex-1" aria-label="New task" placeholder="Add a task…"
+      {!taskId && <form className="mb-6 flex gap-2" onSubmit={add}>
+        <input ref={addInput} className="field min-w-0 flex-1" aria-label="New task" placeholder={today ? "Add a task for today…" : "Add a task…"}
           required value={title} disabled={busy || loading || !!loadError} onChange={(event) => setTitle(event.target.value)} />
         <button className="btn btn-primary" disabled={busy || loading || !!loadError || !title.trim()}>Add</button>
-      </form>
+      </form>}
       {error && <p role="alert" className="mb-4 text-sm text-danger">{error}</p>}
       {loading ? <p role="status" className="text-muted">Loading tasks…</p> : loadError ? (
         <div role="alert" className="well p-4">
           <p className="mb-2 text-danger">{loadError}</p>
-          <button className="btn btn-ghost btn-sm" onClick={load}>Retry</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => void load()}>Retry</button>
         </div>
       ) : (
         <>
           <section aria-label="Active tasks" className="well">
             {open.length ? <ul>{rows(open)}</ul> : (
               <div className="px-6 py-16 text-center">
-                <p className="font-medium">No active tasks</p>
-                <p className="mt-1 text-sm text-muted">Add something above when you’re ready.</p>
+                <p className="font-medium">{taskId ? "Task not found" : today ? "Nothing on Today yet" : "No active tasks"}</p>
+                <p className="mt-1 text-sm text-muted">{taskId ? "Open Home to find your other tasks." : "Add something above when you’re ready."}</p>
               </div>
             )}
           </section>
@@ -86,7 +92,7 @@ export default function HomePage() {
           )}
         </>
       )}
-      <FromV1 />
+      {!today && !taskId && <FromV1 />}
     </div>
   );
 }

@@ -1,11 +1,12 @@
 """Tasks and their append-only history commit atomically in the configured v2 DB."""
 from contextlib import closing
+from collections.abc import Callable
 import json
 from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints, field_validator
 
 from .db import connect, now
 
@@ -19,6 +20,7 @@ class CreateTask(BaseModel):
     title: Title
     notes: str = ""
     parent_id: Parent | None = None
+    today: StrictBool = False
 
 
 class EditTask(BaseModel):
@@ -28,8 +30,9 @@ class EditTask(BaseModel):
     status: Status | None = None
     parent_id: Parent | None = None
     project_id: Parent | None = None
+    today: StrictBool | None = None
 
-    @field_validator("title", "notes", "status")
+    @field_validator("title", "notes", "status", "today")
     @classmethod
     def cannot_be_null(cls, value):
         # Omission leaves a field alone; parent_id and project_id may explicitly be null.
@@ -48,6 +51,8 @@ class Task(BaseModel):
     created_at: str
     updated_at: str
     completed_at: str | None
+    today_on: str | None
+    is_today: bool
 
 
 class History(BaseModel):
@@ -59,14 +64,14 @@ class History(BaseModel):
     new_value: str | None
 
 
-def router(db_path: Path) -> APIRouter:
+def router(db_path: Path, local_date: Callable[[], str]) -> APIRouter:
     api = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
     def get(conn, task_id: int) -> dict:
         row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if row is None:
             raise HTTPException(404, "Task not found")
-        return dict(row)
+        return {**dict(row), "is_today": row["today_on"] == local_date()}
 
     def validate_parent(conn, parent_id: int | None, task_id: int | None = None):
         if parent_id is None:
@@ -92,8 +97,18 @@ def router(db_path: Path) -> APIRouter:
     @api.get("", response_model=list[Task])
     def list_tasks():
         with closing(connect(db_path)) as conn:
-            return [dict(row) for row in conn.execute(
+            day = local_date()
+            return [{**dict(row), "is_today": row["today_on"] == day} for row in conn.execute(
                 "SELECT * FROM tasks ORDER BY status IN ('done', 'cancelled'), id"
+            )]
+
+    @api.get("/today", response_model=list[Task])
+    def today_tasks():
+        # A read only: never clear yesterday's stored date or write audit history.
+        with closing(connect(db_path)) as conn:
+            return [{**dict(row), "is_today": True} for row in conn.execute(
+                "SELECT * FROM tasks WHERE today_on = ? AND status NOT IN ('done', 'cancelled') ORDER BY id",
+                (local_date(),),
             )]
 
     @api.post("", status_code=201, response_model=Task)
@@ -104,12 +119,15 @@ def router(db_path: Path) -> APIRouter:
             # and initial history agree even if the parent is reassigned concurrently.
             project_id = get(conn, body.parent_id)["project_id"] if body.parent_id is not None else None
             stamp = now()
+            day = local_date() if body.today else None
             cursor = conn.execute(
-                "INSERT INTO tasks (title, notes, parent_id, project_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (body.title, body.notes, body.parent_id, project_id, stamp, stamp),
+                "INSERT INTO tasks (title, notes, parent_id, project_id, created_at, updated_at, today_on) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (body.title, body.notes, body.parent_id, project_id, stamp, stamp, day),
             )
             task = get(conn, cursor.lastrowid)
             record(conn, task["id"], stamp, "create", None, json.dumps(task))
+            if day is not None:
+                record(conn, task["id"], stamp, "today_on", None, day)
             return task
 
     def edit(task_id: int, body: EditTask):
@@ -118,7 +136,10 @@ def router(db_path: Path) -> APIRouter:
             # and history's old values always describe the row actually being changed.
             conn.execute("BEGIN IMMEDIATE")
             task = get(conn, task_id)
-            changes = {key: value for key, value in body.model_dump(exclude_unset=True).items()
+            fields = body.model_dump(exclude_unset=True)
+            if "today" in fields:
+                fields["today_on"] = local_date() if fields.pop("today") else None
+            changes = {key: value for key, value in fields.items()
                        if task[key] != value}
             if not changes:
                 return task

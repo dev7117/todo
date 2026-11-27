@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,16 +14,23 @@ from fastapi.staticfiles import StaticFiles
 
 from .db import connect
 
-from . import __version__, config, from_v1, tasks, migrate, projects, ideas, blocks
+from . import __version__, config, from_v1, tasks, migrate, projects, ideas, blocks, search
 from .agent_work import AgentWork
 
 
-def create_app(cfg: config.Config | None = None, *, agent_work: AgentWork | None = None) -> FastAPI:
+def create_app(cfg: config.Config | None = None, *, agent_work: AgentWork | None = None,
+               clock: Callable[[], datetime] | None = None) -> FastAPI:
     cfg = cfg or config.load()
     agents = agent_work or AgentWork(cfg)
+    zone = ZoneInfo(cfg.timezone)
+    clock = clock or (lambda: datetime.now(timezone.utc))
+
+    def local_date() -> str:
+        return clock().astimezone(zone).date().isoformat()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        search.require_fts5()
         cfg.db_path.parent.mkdir(parents=True, exist_ok=True)
         migrate.migrate(cfg.db_path)  # backs up first when anything is pending
         agents.start()
@@ -57,8 +67,9 @@ def create_app(cfg: config.Config | None = None, *, agent_work: AgentWork | None
         agents.refresh()
         return agents.payload()
 
-    app.include_router(tasks.router(cfg.db_path))
-    app.include_router(projects.router(cfg.db_path))
+    app.include_router(tasks.router(cfg.db_path, local_date))
+    app.include_router(search.router(cfg.db_path))
+    app.include_router(projects.router(cfg.db_path, local_date))
     app.include_router(ideas.router(cfg.db_path))
     app.include_router(blocks.router(cfg.db_path))
     app.include_router(from_v1.router(cfg.v1_db_path))

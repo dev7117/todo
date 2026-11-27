@@ -4,6 +4,7 @@ import ProjectsPage from "./pages/ProjectsPage";
 import ProjectPage from "./pages/ProjectPage";
 import IdeasPage from "./pages/IdeasPage";
 import IdeaPage from "./pages/IdeaPage";
+import SearchPage from "./pages/SearchPage";
 import HomePage from "./pages/HomePage";
 import { AccentMenu, ThemeSwitch } from "./components/ThemeControls";
 
@@ -46,15 +47,21 @@ function BuildInfo() {
 }
 
 export default function App() {
-  const [path, setPath] = useState(window.location.pathname);
-  const project = /^\/projects\/(\d+)\/?$/.exec(path);
-  const idea = /^\/ideas\/(\d+)\/?$/.exec(path);
+  const [path, setPath] = useState(window.location.pathname + window.location.search);
+  const pathname = path.split("?")[0];
+  const project = /^\/projects\/(\d+)\/?$/.exec(pathname);
+  const idea = /^\/ideas\/(\d+)\/?$/.exec(pathname);
+  const task = /^\/tasks\/(\d+)\/?$/.exec(pathname);
+  const [query, setQuery] = useState(new URLSearchParams(window.location.search).get("q") ?? "");
   const work = useAgentWork();
   useEffect(() => {
-    const onPop = () => setPath(window.location.pathname);
+    const onPop = () => setPath(window.location.pathname + window.location.search);
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+  useEffect(() => {
+    if (pathname === "/search") setQuery(new URLSearchParams(path.split("?")[1]).get("q") ?? "");
+  }, [path, pathname]);
   function navigate(event: React.MouseEvent<HTMLElement>, to: string) {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
@@ -75,17 +82,26 @@ export default function App() {
             <span className="tag">v2</span>
           </a>
           <nav aria-label="Main navigation" className="order-last flex w-full items-center gap-1 sm:order-none sm:w-auto">
-            <a href="/" onClick={(event) => navigate(event, "/")} aria-current={path === "/" ? "page" : undefined}
-              className={`btn btn-sm ${path === "/" ? "btn-ghost" : "btn-quiet"}`}>Home</a>
-            <a href="/projects" onClick={(event) => navigate(event, "/projects")} aria-current={path.startsWith("/projects") ? "page" : undefined}
-              className={`btn btn-sm ${path.startsWith("/projects") ? "btn-ghost" : "btn-quiet"}`}>Projects</a>
-            <a href="/ideas" onClick={(event) => navigate(event, "/ideas")} aria-current={path.startsWith("/ideas") ? "page" : undefined}
-              className={`btn btn-sm ${path.startsWith("/ideas") ? "btn-ghost" : "btn-quiet"}`}>Ideas</a>
-            <a href="/agents" onClick={(event) => navigate(event, "/agents")} aria-current={path === "/agents" ? "page" : undefined}
-              className={`btn btn-sm ${path === "/agents" ? "btn-ghost" : "btn-quiet"}`}>Agents
+            <a href="/" onClick={(event) => navigate(event, "/")} aria-current={pathname === "/" ? "page" : undefined}
+              className={`btn btn-sm ${pathname === "/" ? "btn-ghost" : "btn-quiet"}`}>Home</a>
+            <a href="/today" onClick={(event) => navigate(event, "/today")} aria-current={pathname === "/today" ? "page" : undefined}
+              className={`btn btn-sm ${pathname === "/today" ? "btn-ghost" : "btn-quiet"}`}>Today</a>
+            <a href="/projects" onClick={(event) => navigate(event, "/projects")} aria-current={pathname.startsWith("/projects") ? "page" : undefined}
+              className={`btn btn-sm ${pathname.startsWith("/projects") ? "btn-ghost" : "btn-quiet"}`}>Projects</a>
+            <a href="/ideas" onClick={(event) => navigate(event, "/ideas")} aria-current={pathname.startsWith("/ideas") ? "page" : undefined}
+              className={`btn btn-sm ${pathname.startsWith("/ideas") ? "btn-ghost" : "btn-quiet"}`}>Ideas</a>
+            <a href="/agents" onClick={(event) => navigate(event, "/agents")} aria-current={pathname === "/agents" ? "page" : undefined}
+              className={`btn btn-sm ${pathname === "/agents" ? "btn-ghost" : "btn-quiet"}`}>Agents
               {!!work.data?.waiting_on_dev.length && <span className="tag tabular" aria-label={`${work.data.waiting_on_dev.length} waiting on you`}>{work.data.waiting_on_dev.length}</span>}
             </a>
           </nav>
+          <form role="search" className="order-last flex w-full gap-2 sm:order-none sm:w-auto sm:flex-1" onSubmit={(event) => {
+            event.preventDefault(); navigateTo(`/search?q=${encodeURIComponent(query.trim())}`);
+          }}>
+            <input type="search" className="field field-sm min-w-0 flex-1" aria-label="Search tasks, ideas, and notes"
+              placeholder="Search tasks, ideas, notes…" maxLength={500} value={query} onChange={(event) => setQuery(event.target.value)} />
+            <button className="btn btn-ghost btn-sm">Search</button>
+          </form>
           <div className="ml-auto flex items-center gap-1">
             <AccentMenu />
             <ThemeSwitch />
@@ -96,7 +112,15 @@ export default function App() {
         const link = (event.target as HTMLElement).closest<HTMLAnchorElement>("a[data-app-link]");
         if (link) navigate(event, link.getAttribute("href")!);
       }}>
-        {path === "/agents" ? <AgentsPage work={work} /> : idea ? <IdeaPage key={idea[1]} id={Number(idea[1])} /> : /^\/ideas\/?$/.test(path) ? <IdeasPage onNavigate={navigateTo} /> : project ? <ProjectPage key={project[1]} id={Number(project[1])} /> : /^\/projects\/?$/.test(path) ? <ProjectsPage onNavigate={navigateTo} /> : <HomePage />}
+        {pathname === "/search" ? <SearchPage key={path} query={new URLSearchParams(path.split("?")[1]).get("q") ?? ""} />
+          : pathname === "/today" ? <HomePage key="today" today />
+          : task ? <HomePage key={pathname} taskId={Number(task[1])} />
+          : pathname === "/agents" ? <AgentsPage work={work} />
+          : idea ? <IdeaPage key={idea[1]} id={Number(idea[1])} />
+          : /^\/ideas\/?$/.test(pathname) ? <IdeasPage onNavigate={navigateTo} />
+          : project ? <ProjectPage key={project[1]} id={Number(project[1])} />
+          : /^\/projects\/?$/.test(pathname) ? <ProjectsPage onNavigate={navigateTo} />
+          : <HomePage key="home" />}
         <BuildInfo />
       </main>
     </div>

@@ -11,6 +11,8 @@ export interface Task {
   parent_id: number | null;
   project_id: number | null;
   updated_at: string;
+  today_on: string | null;
+  is_today: boolean;
 }
 export interface HistoryEntry {
   id: number;

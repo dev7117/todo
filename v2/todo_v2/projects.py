@@ -1,5 +1,6 @@
 """UI-facing project REST API. No MCP or agent completion interface is exposed."""
 from contextlib import closing
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
@@ -82,7 +83,7 @@ def progress(conn, project_id: int) -> dict:
             "percent": 100 * row["done"] / row["total"] if row["total"] else 0}
 
 
-def router(db_path: Path) -> APIRouter:
+def router(db_path: Path, local_date: Callable[[], str]) -> APIRouter:
     api = APIRouter(prefix="/api/projects", tags=["projects"])
 
     def get(conn, project_id):
@@ -116,7 +117,8 @@ def router(db_path: Path) -> APIRouter:
         with closing(connect(db_path)) as conn, conn:
             conn.execute("BEGIN")
             project = get(conn, project_id)
-            return {**project, "tasks": [dict(row) for row in conn.execute(
+            day = local_date()
+            return {**project, "tasks": [{**dict(row), "is_today": row["today_on"] == day} for row in conn.execute(
                 "SELECT * FROM tasks WHERE project_id = ? ORDER BY status IN ('done', 'cancelled'), id",
                 (project_id,),
             )]}
