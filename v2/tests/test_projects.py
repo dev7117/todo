@@ -63,7 +63,7 @@ def test_project_round_trip(client):
     assert client.delete(path).status_code in (404, 405)
     assert client.get(path).status_code == 200
     health = client.get("/health").json()
-    assert set(health) == {"ok", "version", "commit", "schema_version"}
+    assert set(health) == {"ok", "version", "commit", "schema_version", "github"}
     assert health["schema_version"] == 4
 
 
@@ -172,8 +172,19 @@ def test_only_ui_rest_can_complete_projects(cfg):
     api_paths = {route.path for route in routes if route.path.startswith("/api/")}
     assert api_paths == {"/api/tasks", "/api/tasks/{task_id}", "/api/tasks/{task_id}/complete",
                          "/api/tasks/{task_id}/reopen", "/api/tasks/{task_id}/history", "/api/from-v1",
-                         "/api/projects", "/api/projects/{project_id}"}
-    assert not any("mcp" in route.path.lower() or "agent" in route.path.lower() for route in routes)
+                         "/api/projects", "/api/projects/{project_id}",
+                         "/api/agent-work", "/api/agent-work/refresh"}
+    assert not any("mcp" in route.path.lower() for route in routes)
+    assert {(route.path, method) for route in routes if "agent" in route.path.lower()
+            for method in route.methods} == {("/api/agent-work", "GET"), ("/api/agent-work/refresh", "POST")}
+    with TestClient(app) as client:
+        row = project(client)
+        path = f'/api/projects/{row["id"]}'
+        before = client.get(path).json()
+        # The landed GitHub cache refresh is read-only with respect to projects.
+        client.post("/api/agent-work/refresh", json={"project_id": row["id"], "status": "done"})
+        assert client.get(path).json() == before
+        assert client.post("/api/agent-work/complete", json={"project_id": row["id"]}).status_code in (404, 405)
     assert not any("mcp" in key.lower() for key in app.state._state)
 
 
