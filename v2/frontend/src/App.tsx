@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import ProjectsPage from "./pages/ProjectsPage";
+import ProjectPage from "./pages/ProjectPage";
 import HomePage from "./pages/HomePage";
 import { AccentMenu, ThemeSwitch } from "./components/ThemeControls";
 
@@ -41,15 +43,21 @@ function BuildInfo() {
 }
 
 export default function App() {
+  const path = window.location.pathname.replace(/\/$/, "") || "/";
+  const project = /^\/projects\/(\d+)$/.exec(path);
   return (
     <div className="frame">
       <header className="sticky top-0 z-40 border-b border-edge bg-panel/80 backdrop-blur-xl backdrop-saturate-150">
-        <div className="mx-auto flex h-14 max-w-[1280px] items-center gap-6 px-4 sm:px-8">
+        <div className="mx-auto flex min-h-14 max-w-[1280px] flex-wrap items-center gap-2 px-4 py-2 sm:h-14 sm:flex-nowrap sm:px-8 sm:py-0">
           <a href="/" className="inline-flex shrink-0 items-center gap-2.5 text-[0.9375rem] font-semibold tracking-[-0.015em]">
             <Mark />
             <span>Todo</span>
             <span className="tag">v2</span>
           </a>
+          <nav aria-label="Main" className="order-last flex w-full items-center gap-1 sm:order-none sm:ml-4 sm:w-auto">
+            <a href="/" className="nav-link" aria-current={path === "/" ? "page" : undefined}>Tasks</a>
+            <a href="/projects" className="nav-link" aria-current={path.startsWith("/projects") ? "page" : undefined}>Projects</a>
+          </nav>
           <div className="ml-auto flex items-center gap-1">
             <AccentMenu />
             <ThemeSwitch />
@@ -57,7 +65,7 @@ export default function App() {
         </div>
       </header>
       <main className="mx-auto w-full max-w-[1280px] px-4 pb-24 pt-8 sm:px-8 sm:pt-10">
-        <HomePage />
+        {project ? <ProjectPage id={Number(project[1])} /> : path === "/projects" ? <ProjectsPage /> : <HomePage />}
         <BuildInfo />
       </main>
     </div>

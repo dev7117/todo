@@ -9,6 +9,7 @@ export interface Task {
   notes: string;
   status: Status;
   parent_id: number | null;
+  project_id: number | null;
   updated_at: string;
 }
 export interface HistoryEntry {

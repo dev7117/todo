@@ -27,11 +27,12 @@ class EditTask(BaseModel):
     notes: str | None = None
     status: Status | None = None
     parent_id: Parent | None = None
+    project_id: Parent | None = None
 
     @field_validator("title", "notes", "status")
     @classmethod
     def cannot_be_null(cls, value):
-        # Omission leaves a field alone; only parent_id may explicitly be null.
+        # Omission leaves a field alone; parent_id and project_id may explicitly be null.
         if value is None:
             raise ValueError("Field must not be null")
         return value
@@ -43,6 +44,7 @@ class Task(BaseModel):
     notes: str
     status: Status
     parent_id: int | None
+    project_id: int | None
     created_at: str
     updated_at: str
     completed_at: str | None
@@ -120,6 +122,9 @@ def router(db_path: Path) -> APIRouter:
                 return task
             if "parent_id" in changes:
                 validate_parent(conn, changes["parent_id"], task_id)
+            if "project_id" in changes and changes["project_id"] is not None:
+                if conn.execute("SELECT 1 FROM projects WHERE id = ?", (changes["project_id"],)).fetchone() is None:
+                    raise HTTPException(422, "Project not found")
             stamp = now()
             for field, value in changes.items():
                 record(conn, task_id, stamp, field, task[field], value)
